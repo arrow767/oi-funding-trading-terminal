@@ -1,0 +1,165 @@
+# Prometheus alert rules for the OI platform.
+#
+# Load in prometheus.yml:
+#   rule_files:
+#     - /etc/prometheus/rules/oi.yml
+#
+# Scrape targets expected:
+#   - oi-collector:9090    (metrics prefix oi_*)
+#   - oi-api:9091          (metrics prefix oi_api_*)
+
+groups:
+  - name: oi.ingest
+    interval: 30s
+    rules:
+      # Severity-1: we stopped writing any exchange for 3 consecutive
+      # minutes. Something is broken system-wide (collector down,
+      # ClickHouse unreachable, lease stuck on a dead node).
+      - alert: OiCollectorStalled
+        expr: sum(rate(oi_snapshots_written_total[3m])) == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Collector has written zero snapshots in the last 3 minutes"
+          description: |
+            No exchange wrote a minute bar in 3m. Check oi-collector logs,
+            lease ownership (`oi_leader`), and the `/health/ready` endpoint.
+
+      # Severity-2: a specific exchange is silent while the rest are
+      # fine. Usually: exchange API outage, credential expiry, or our
+      # rate-limiter pressure.
+      - alert: OiExchangeStalled
+        expr: |
+          sum by (exchange) (rate(oi_snapshots_written_total[5m])) == 0
+          and on (exchange) oi_instruments_tracked > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Exchange {{ $labels.exchange }} hasn't produced snapshots in 5m"
+          description: "Investigate `oi_rest_errors_total{exchange=\"{{ $labels.exchange }}\"}` and upstream status."
+
+      - alert: OiHighRestErrorRate
+        expr: |
+          sum by (exchange, kind) (rate(oi_rest_errors_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.exchange }}: >0.5 {{ $labels.kind }} errors/sec for 5m"
+
+  - name: oi.ws
+    interval: 30s
+    rules:
+      - alert: OiWsReconnectStorm
+        expr: |
+          sum by (handler) (rate(oi_ws_reconnects_total[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WS handler {{ $labels.handler }} reconnecting >12x/hour for 10m"
+          description: |
+            Reconnects happen normally on deploys and upstream restarts,
+            but a sustained storm usually means the handler's idle
+            timeout or heartbeat cadence is misconfigured, or the
+            upstream is rate-limiting our WS connections.
+
+  - name: oi.wal
+    interval: 30s
+    rules:
+      # Drainer is keeping up — but the queue is non-trivial. Useful
+      # signal that CH is sluggish or under-provisioned.
+      - alert: OiWalBacklogWarning
+        expr: oi_wal_oldest_pending_age_seconds > 300
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WAL oldest entry is {{ $value | humanizeDuration }} old"
+          description: |
+            ClickHouse drain is lagging. Inspect `oi_wal_pending_files`
+            and ClickHouse insert latency / errors. Sustained backlog
+            (>5m) usually means CH is under-provisioned or we hit a
+            persistent ingest error the drainer can't get past.
+
+      # Hard threshold — at 30 minutes we're at risk of exceeding the
+      # operator's RTO if we crash now (the queue is large enough that
+      # a re-drain takes meaningful time).
+      - alert: OiWalBacklogCritical
+        expr: oi_wal_oldest_pending_age_seconds > 1800
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WAL oldest entry is {{ $value | humanizeDuration }} old (>30m)"
+          description: |
+            Drain has been stuck for >30 minutes. ClickHouse is almost
+            certainly down or unreachable. Page the database on-call.
+
+      # Drainer process bug — pending count rising while the drained
+      # counter is flat. Catches a subtler failure mode than just
+      # "CH down": e.g. the drainer task panicked / deadlocked.
+      - alert: OiWalDrainerStuck
+        expr: |
+          oi_wal_pending_files > 5
+          and rate(oi_wal_drained_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WAL has {{ $value }} pending files but drainer hasn't acked anything in 10m"
+          description: "Restart the collector if CH is healthy; this is a bug, not a back-pressure signal."
+
+  - name: oi.ha
+    interval: 30s
+    rules:
+      - alert: OiLeaseFlipping
+        expr: |
+          changes(oi_leader[10m]) > 4
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Lease changed hands more than 4 times in 10m"
+          description: |
+            Usually this means two collectors are racing because the
+            refresh interval is too close to TTL or network jitter is
+            biting. Consider raising `failover.ttl_secs`.
+
+      - alert: OiNoLeader
+        expr: sum(oi_leader) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No collector currently holds the failover lease"
+          description: "Writes are halted. Check Redis reachability."
+
+  - name: oi.api
+    interval: 30s
+    rules:
+      - alert: OiApiHighErrorRate
+        expr: |
+          sum(rate(oi_api_requests_total{status=~"internal|service_unavailable"}[5m]))
+          /
+          sum(rate(oi_api_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "oi-api error rate >5% over 5m"
+
+      - alert: OiApiSlowLatest
+        # p95 of Latest over 5m exceeds 250ms.
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(oi_api_request_seconds_bucket{method="Latest"}[5m]))
+          ) > 0.25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "oi-api Latest p95 > 250ms for 10m"

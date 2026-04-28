@@ -1,0 +1,56 @@
+# oi-collector configuration.
+# Env overrides: `OI_<SECTION>__<KEY>`, e.g. `OI_CLICKHOUSE__URL`.
+
+[clickhouse]
+url      = "http://clickhouse:8123"
+database = "oi"
+user     = "default"
+password = ""
+
+[redis]
+url = "redis://redis:6379"
+
+[exchanges]
+# Empty = collector runs every adapter flagged production-ready in
+# oi-exchanges/src/lib.rs. Current production set:
+#   binance, bybit, hyperliquid, okx, bitget, mexc, aster, bingx
+# During rollout you can pin the list:
+# enabled = ["binance"]
+enabled = []
+
+[failover]
+# For single-node deploys, leave disabled — the collector always writes.
+# For two-node HA, set `enabled = true` on BOTH nodes pointing at the
+# same Redis; only the lease holder writes. The standby keeps WS state
+# warm so failover is effectively instant.
+enabled = false
+# Uncomment to pin a human-readable node id (defaults to a UUID).
+# node_id = "collector-a"
+# ttl_secs = 15
+# refresh_secs = 5
+
+[wal]
+# Durable queue between the collector and ClickHouse. When enabled,
+# every snapshot batch hits disk (atomic write-rename + fsync) BEFORE
+# the ClickHouse upsert; a background drainer replays files that
+# failed to reach CH. Survives collector crashes and CH outages
+# (limited by disk space).
+#
+# Recommended for production. Set `dir` to a local SSD path; don't
+# point it at NFS (fsync semantics get weird).
+enabled = false
+dir = "/var/lib/oi/wal"
+# Warn + metric when pending count exceeds this. No hard cap: the
+# real limit is your disk quota.
+soft_max_files = 10000
+# Drainer cadence (seconds). Lower = faster recovery, more wake-ups.
+drain_interval_secs = 10
+# Follower-side reaper: when this collector is in HA standby (failover
+# enabled, lease held by the other node), pending WAL files older
+# than this are deleted so the standby's disk doesn't grow forever.
+# Trade-off: any minute older than this is gone if this node is later
+# promoted. Pick a value larger than your worst-case CH outage +
+# planned-failover window. Omit / comment out to keep everything.
+# follower_max_age_secs = 86400  # 24h
+
+metrics_addr = "0.0.0.0:9090"

@@ -1,0 +1,42 @@
+[package]
+name = "oi-collector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Daemon that schedules OI collection, enriches, and persists."
+
+[[bin]]
+name = "oi-collector"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+oi-core = { workspace = true }
+oi-exchanges = { workspace = true }
+oi-storage = { workspace = true }
+oi-replication = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+chrono = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+figment = { workspace = true }
+dotenvy = { workspace = true }
+clap = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = { workspace = true }

@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<!-- Replica config for shard 1, replica 2. See server-1.xml for notes. -->
+<clickhouse>
+    <zookeeper>
+        <node>
+            <host>keeper</host>
+            <port>9181</port>
+        </node>
+    </zookeeper>
+
+    <macros>
+        <shard>01</shard>
+        <replica>ch2</replica>
+        <cluster>oi</cluster>
+    </macros>
+
+    <remote_servers>
+        <oi>
+            <shard>
+                <internal_replication>true</internal_replication>
+                <replica>
+                    <host>clickhouse-1</host>
+                    <port>9000</port>
+                </replica>
+                <replica>
+                    <host>clickhouse-2</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+        </oi>
+    </remote_servers>
+
+    <distributed_ddl>
+        <path>/clickhouse/task_queue/ddl</path>
+    </distributed_ddl>
+</clickhouse>

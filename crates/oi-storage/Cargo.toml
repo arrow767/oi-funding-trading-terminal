@@ -1,0 +1,40 @@
+[package]
+name = "oi-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "ClickHouse + Redis repositories for OI snapshots."
+
+[lints]
+workspace = true
+
+[dependencies]
+oi-core = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+time = { workspace = true }
+chrono = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+clickhouse = { workspace = true }
+redis = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = { workspace = true }
+bytes = { workspace = true }
+rmp-serde = { workspace = true }
+futures = { workspace = true }
+metrics = { workspace = true }
+crc32fast = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true }
+testcontainers = { workspace = true }

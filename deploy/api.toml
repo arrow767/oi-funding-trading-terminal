@@ -1,0 +1,33 @@
+# oi-api configuration.
+# Env overrides: `OI_API_<SECTION>__<KEY>`.
+
+[clickhouse]
+url      = "http://clickhouse:8123"
+database = "oi"
+user     = "default"
+password = ""
+
+[redis]
+url = "redis://redis:6379"
+
+grpc_addr = "0.0.0.0:50051"
+rest_addr = "0.0.0.0:8080"
+
+[tls]
+# When false, both endpoints serve plaintext (acceptable inside a
+# private VPC). When true, point at PEM-encoded cert + key files;
+# both gRPC and REST share the same identity.
+enabled = false
+cert_path = "/etc/oi/tls/server.crt"
+key_path = "/etc/oi/tls/server.key"
+
+[auth]
+# When false, all paths are open. When true, every request to data
+# endpoints must carry `Authorization: Bearer <token>` matching one
+# of the entries below. Health (`/health*`) and metrics (`/metrics`)
+# always bypass auth so probes and Prometheus scrapes work.
+enabled = false
+# Generate with `openssl rand -base64 32`. Rotate by adding a new
+# token, deploying, then removing the old one — both versions are
+# accepted in parallel during the rollover.
+tokens = []

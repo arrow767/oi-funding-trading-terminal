@@ -1,0 +1,76 @@
+# Two-node replicated deployment.
+#
+# Runs two ClickHouse shards (each a 1-replica replica-set for simplicity;
+# in a true HA setup you'd use 2 replicas per shard). ClickHouse Keeper
+# provides consensus. Both collectors write to shard_1; ReplicatedMergeTree
+# propagates to shard_2 automatically.
+#
+# One collector is "primary" by virtue of holding a lease in Redis; the
+# other runs in hot-standby — it discovers instruments but does NOT call
+# `fetch_oi` until it wins the lease. See oi-replication/src/failover.rs.
+#
+# Deploy this on two separate hosts by splitting the services across nodes
+# (see docs/replication.md for the tested layout).
+
+version: "3.9"
+
+services:
+  keeper:
+    image: clickhouse/clickhouse-keeper:24.8
+    container_name: oi-keeper
+    volumes:
+      - keeper_data:/var/lib/clickhouse-keeper
+      - ./clickhouse/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+    ports:
+      - "9181:9181"
+
+  clickhouse-1:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: oi-ch1
+    depends_on: [keeper]
+    volumes:
+      - ch1_data:/var/lib/clickhouse
+      - ./clickhouse/server-1.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ../migrations:/docker-entrypoint-initdb.d:ro
+
+  clickhouse-2:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: oi-ch2
+    depends_on: [keeper]
+    volumes:
+      - ch2_data:/var/lib/clickhouse
+      - ./clickhouse/server-2.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: oi-redis
+    command: ["redis-server", "--appendonly", "yes"]
+
+  collector-primary:
+    build: { context: .., dockerfile: deploy/Dockerfile, target: collector }
+    environment:
+      OI_ROLE: primary
+      OI_CLICKHOUSE__URL: http://clickhouse-1:8123
+      OI_REDIS__URL: redis://redis:6379
+    depends_on: [clickhouse-1, redis]
+
+  collector-standby:
+    build: { context: .., dockerfile: deploy/Dockerfile, target: collector }
+    environment:
+      OI_ROLE: standby
+      OI_CLICKHOUSE__URL: http://clickhouse-2:8123
+      OI_REDIS__URL: redis://redis:6379
+    depends_on: [clickhouse-2, redis]
+
+  api:
+    build: { context: .., dockerfile: deploy/Dockerfile, target: api }
+    environment:
+      OI_API_CLICKHOUSE__URL: http://clickhouse-1:8123
+      OI_API_REDIS__URL: redis://redis:6379
+    depends_on: [clickhouse-1, redis]
+    ports: ["50051:50051", "8080:8080"]
+
+volumes:
+  keeper_data:
+  ch1_data:
+  ch2_data:

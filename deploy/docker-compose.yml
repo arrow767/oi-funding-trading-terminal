@@ -1,0 +1,107 @@
+# Single-node dev/prod-lite stack.
+# For the two-node replicated setup, see deploy/docker-compose.replicated.yml
+# and docs/replication.md.
+version: "3.9"
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: oi-clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - ch_data:/var/lib/clickhouse
+      - ch_logs:/var/log/clickhouse-server
+      - ../migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:8123:8123"   # HTTP
+      - "127.0.0.1:9000:9000"   # Native TCP (clients)
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: oi-redis
+    command: ["redis-server", "--maxmemory", "2gb", "--maxmemory-policy", "allkeys-lru", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+
+  collector:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: collector
+    container_name: oi-collector
+    depends_on:
+      clickhouse: { condition: service_healthy }
+      redis:      { condition: service_healthy }
+    environment:
+      RUST_LOG: info
+      OI_CONFIG: /etc/oi/collector.toml
+      OI_CLICKHOUSE__URL: http://clickhouse:8123
+      OI_REDIS__URL: redis://redis:6379
+    volumes:
+      - ./collector.toml:/etc/oi/collector.toml:ro
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: api
+    container_name: oi-api
+    depends_on:
+      clickhouse: { condition: service_healthy }
+      redis:      { condition: service_healthy }
+    environment:
+      RUST_LOG: info
+      OI_API_CONFIG: /etc/oi/api.toml
+      OI_API_CLICKHOUSE__URL: http://clickhouse:8123
+      OI_API_REDIS__URL: redis://redis:6379
+    volumes:
+      - ./api.toml:/etc/oi/api.toml:ro
+    ports:
+      - "50051:50051"  # gRPC
+      - "8080:8080"    # REST
+    restart: unless-stopped
+
+  # ClickHouse backup sidecar — s3-compatible target.
+  # Configure with env vars from .env before running.
+  clickhouse-backup:
+    image: altinity/clickhouse-backup:2.6.6
+    container_name: oi-ch-backup
+    depends_on:
+      clickhouse: { condition: service_healthy }
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "9000"
+      CLICKHOUSE_USERNAME: default
+      REMOTE_STORAGE: ${BACKUP_STORAGE:-none}
+      S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      S3_REGION: ${BACKUP_S3_REGION:-}
+      S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+    volumes:
+      - ch_data:/var/lib/clickhouse
+      - ./backup/config.yml:/etc/clickhouse-backup/config.yml:ro
+    command: server
+    restart: unless-stopped
+
+volumes:
+  ch_data:
+  ch_logs:
+  redis_data:

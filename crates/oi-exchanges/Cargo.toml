@@ -1,0 +1,44 @@
+[package]
+name = "oi-exchanges"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Exchange adapters that implement oi-core::ExchangeAdapter."
+
+[lints]
+workspace = true
+
+[dependencies]
+oi-core = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+url = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+time = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+governor = { workspace = true }
+backon = { workspace = true }
+metrics = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = { workspace = true }
+once_cell = { workspace = true }
+bytes = { workspace = true }
+hex = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+wiremock = { workspace = true }
+rstest = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true }

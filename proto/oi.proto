@@ -1,0 +1,166 @@
+syntax = "proto3";
+
+package oi.v1;
+
+// OI service for the trading terminal.
+//
+// Wire conventions:
+//  * Decimal values are encoded as STRINGS — protobuf has no decimal
+//    type and floats lose precision on large coin-unit OI values.
+//  * Timestamps are `google.protobuf.Timestamp`.
+//  * Each `Bar` is a one-minute OHLC bar. For exchanges with WS
+//    live push the bar updates many times within the minute and
+//    `samples > 1`; for REST-only exchanges samples == 1 and
+//    open == high == low == close.
+//
+// gRPC streams:
+//  * `Range` server-streams historical bars so terminals can render
+//    the chart progressively.
+//  * `Subscribe` server-streams live updates — every bar update
+//    (including in-progress same-minute bars from WS push) is sent.
+//    Final flushed bars carry `last_recv_ts` near the minute close.
+
+import "google/protobuf/timestamp.proto";
+
+service OiService {
+  // Latest snapshot per instrument. Polled from terminals for the
+  // cursor tip when WS isn't an option.
+  rpc Latest(LatestRequest) returns (LatestResponse);
+
+  // Historical range. Server streams bars in chronological order.
+  rpc Range(RangeRequest) returns (stream Bar);
+
+  // Live push. Server streams every bar update — for WS-pushed
+  // exchanges this includes in-progress minute bars updating in
+  // real time.
+  rpc Subscribe(SubscribeRequest) returns (stream Bar);
+
+  // Funding-rate query family. Funding is sampled per-minute
+  // alongside OI; consumers care about it independently
+  // (different chart, different alerts).
+  rpc LatestFunding(LatestFundingRequest) returns (LatestFundingResponse);
+  rpc FundingRange(FundingRangeRequest) returns (stream Funding);
+
+  // Settlement events — actually-paid funding rates at the venue's
+  // settlement boundaries. Distinct from `Funding` (continuous
+  // predicted-rate sampling): events are sparse, sit at exact
+  // boundaries, and carry the realised rate the exchange applied.
+  rpc LatestFundingEvent(LatestFundingEventRequest)
+      returns (LatestFundingEventResponse);
+  rpc FundingEventRange(FundingEventRangeRequest)
+      returns (stream FundingEvent);
+}
+
+enum Unit {
+  UNIT_UNSPECIFIED = 0;
+  COINS = 1;
+  CONTRACTS = 2;
+  USD = 3;
+}
+
+message Instrument {
+  string exchange = 1;
+  string symbol = 2;
+}
+
+// One-minute OHLC bar.
+//
+// `samples` is how many observations folded into this bar. >1 means
+// the bar saw intra-minute updates (WS push); ==1 means it's a REST
+// snapshot or an in-progress bar that's just opened.
+message Bar {
+  Instrument instrument = 1;
+  google.protobuf.Timestamp bucket_ts = 2;
+  google.protobuf.Timestamp first_recv_ts = 3;
+  google.protobuf.Timestamp last_recv_ts = 4;
+  uint32 samples = 5;
+
+  Unit native_unit = 10;
+  // Decimal-as-string. Empty string means "unknown" / null.
+  string native_open = 11;
+  string native_high = 12;
+  string native_low = 13;
+  string native_close = 14;
+
+  string oi_coins_open = 20;
+  string oi_coins_high = 21;
+  string oi_coins_low = 22;
+  string oi_coins_close = 23;
+
+  string oi_usd_open = 30;
+  string oi_usd_high = 31;
+  string oi_usd_low = 32;
+  string oi_usd_close = 33;
+
+  string price_used_close = 40;
+}
+
+message LatestRequest {
+  repeated Instrument instruments = 1;
+}
+
+message LatestResponse {
+  repeated Bar bars = 1;
+}
+
+message RangeRequest {
+  Instrument instrument = 1;
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to = 3;
+}
+
+message SubscribeRequest {
+  repeated Instrument instruments = 1;
+}
+
+// One per-minute funding-rate sample. `rate` is decimal-as-string
+// (e.g. `"0.0001"` = 1 bp). `next_funding_ts` is absent when the
+// exchange doesn't publish it.
+message Funding {
+  Instrument instrument = 1;
+  google.protobuf.Timestamp bucket_ts = 2;
+  google.protobuf.Timestamp recv_ts = 3;
+  string rate = 4;
+  google.protobuf.Timestamp next_funding_ts = 5;
+  // 0 means "interval not reported" — clients infer from the
+  // cadence of next_funding_ts changes.
+  uint32 interval_hours = 6;
+}
+
+message LatestFundingRequest {
+  repeated Instrument instruments = 1;
+}
+
+message LatestFundingResponse {
+  repeated Funding bars = 1;
+}
+
+message FundingRangeRequest {
+  Instrument instrument = 1;
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to = 3;
+}
+
+// Settlement event — the funding actually paid at the venue's
+// settlement boundary. `mark_price` is empty when the exchange
+// doesn't co-publish it on the funding-history endpoint.
+message FundingEvent {
+  Instrument instrument = 1;
+  google.protobuf.Timestamp settlement_ts = 2;
+  string rate = 3;
+  string mark_price = 4;
+}
+
+message LatestFundingEventRequest {
+  repeated Instrument instruments = 1;
+}
+
+message LatestFundingEventResponse {
+  repeated FundingEvent events = 1;
+}
+
+message FundingEventRangeRequest {
+  Instrument instrument = 1;
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to = 3;
+}

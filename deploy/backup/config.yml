@@ -1,0 +1,20 @@
+# clickhouse-backup config. Override values via env in docker-compose.
+# See https://altinity-clickhouse-backup.readthedocs.io/ for full reference.
+general:
+  remote_storage: s3
+  backups_to_keep_local: 3
+  backups_to_keep_remote: 30
+  log_level: info
+clickhouse:
+  host: clickhouse
+  port: 9000
+  username: default
+  password: ""
+  timeout: 5m
+s3:
+  bucket: ${S3_BUCKET}
+  region: ${S3_REGION}
+  access_key: ${S3_ACCESS_KEY}
+  secret_key: ${S3_SECRET_KEY}
+  compression_level: 3
+  compression_format: zstd

@@ -1,0 +1,180 @@
+{
+  "title": "OI Platform",
+  "uid": "oi-platform",
+  "schemaVersion": 39,
+  "timezone": "utc",
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "exchange",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(oi_snapshots_written_total, exchange)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Snapshots written / minute (per exchange)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (exchange) (increase(oi_snapshots_written_total{exchange=~\"$exchange\"}[1m]))",
+          "legendFormat": "{{exchange}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Live WS publishes / second",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (exchange) (rate(oi_live_publishes_total{exchange=~\"$exchange\"}[1m]))",
+          "legendFormat": "{{exchange}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Active instruments (by exchange)",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "oi_instruments_tracked{exchange=~\"$exchange\"}",
+          "legendFormat": "{{exchange}}"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Leader elected?",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 8 },
+      "targets": [{ "expr": "max(oi_leader)", "legendFormat": "leader" }],
+      "options": { "reduceOptions": { "calcs": ["last"] } },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "no leader", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "OK", "color": "green" } } }
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "REST errors / minute (by exchange & kind)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "targets": [
+        {
+          "expr": "sum by (exchange, kind) (increase(oi_rest_errors_total{exchange=~\"$exchange\"}[1m]))",
+          "legendFormat": "{{exchange}} {{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "WS reconnects / minute",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "targets": [
+        {
+          "expr": "sum by (handler) (increase(oi_ws_reconnects_total[1m]))",
+          "legendFormat": "{{handler}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "WAL oldest pending age (seconds)",
+      "description": "Age of the oldest un-acked WAL file. Sustained >300s = drain lagging. >1800s = critical (CH likely down).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "targets": [
+        {
+          "expr": "oi_wal_oldest_pending_age_seconds",
+          "legendFormat": "age"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 300 },
+              { "color": "red", "value": 1800 }
+            ]
+          },
+          "custom": { "thresholdsStyle": { "mode": "line" } }
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "WAL pending files / drained per minute",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+      "targets": [
+        { "expr": "oi_wal_pending_files", "legendFormat": "pending" },
+        {
+          "expr": "increase(oi_wal_drained_total[1m])",
+          "legendFormat": "drained/min"
+        },
+        {
+          "expr": "increase(oi_wal_writes_total[1m])",
+          "legendFormat": "writes/min"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "oi-api request rate",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
+      "targets": [
+        {
+          "expr": "sum by (method, status) (rate(oi_api_requests_total[1m]))",
+          "legendFormat": "{{method}} / {{status}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "oi-api Latest p50 / p95 / p99",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(oi_api_request_seconds_bucket{method=\"Latest\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(oi_api_request_seconds_bucket{method=\"Latest\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(oi_api_request_seconds_bucket{method=\"Latest\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    }
+  ]
+}
