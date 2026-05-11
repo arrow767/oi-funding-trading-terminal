@@ -6,6 +6,7 @@ pub mod grpc;
 pub mod metrics;
 pub mod rest;
 pub mod server;
+pub mod ws;
 
 /// Generated proto types + gRPC client/server. Re-exported so
 /// terminals that depend on this crate get the typed stubs without

@@ -33,8 +33,9 @@ impl AuthState {
     }
 
     /// Constant-time comparison of `presented` against the accepted
-    /// list. Returns true on first match.
-    fn accepts(&self, presented: &str) -> bool {
+    /// list. Returns true on first match. Public so the WS handler
+    /// can run the same check on its query-param token.
+    pub fn accepts(&self, presented: &str) -> bool {
         // We compare each accepted token in CT to leak no info about
         // which token was tried. Length differences DO leak via the
         // bytes-equal short-circuit but that's acceptable: token
@@ -90,9 +91,15 @@ pub async fn rest_auth_middleware(
 fn is_public_path(path: &str) -> bool {
     // Exact-prefix match. `/healthier` would NOT match `/health` —
     // that's correct (no accidental bypass via similar names).
+    //
+    // `/ws/*` is "public" at the middleware layer because browsers
+    // can't set the `Authorization` header on a WebSocket upgrade.
+    // The WS handler then re-authenticates via the `token` query
+    // parameter — see `ws::ws_subscribe_handler`.
     path == "/health"
         || path.starts_with("/health/")
         || path == "/metrics"
+        || path.starts_with("/ws/")
 }
 
 fn unauthenticated_response() -> Response {

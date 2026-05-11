@@ -1,6 +1,6 @@
-# Single-node dev/prod-lite stack.
-# For the two-node replicated setup, see deploy/docker-compose.replicated.yml
-# and docs/replication.md.
+# Single-node prod stack tuned for 10–50k concurrent users.
+# Layout: nginx (TLS, rate limit, cache, WS upgrade) → oi-api (REST + WS + gRPC) → CH + Redis.
+# For the two-node replicated setup, see docker-compose.replicated.yml.
 version: "3.9"
 
 services:
@@ -15,11 +15,10 @@ services:
       - ch_data:/var/lib/clickhouse
       - ch_logs:/var/log/clickhouse-server
       - ../migrations:/docker-entrypoint-initdb.d:ro
-    ports:
-      - "127.0.0.1:8123:8123"   # HTTP
-      - "127.0.0.1:9000:9000"   # Native TCP (clients)
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: "1"
+    # No public port — only the docker network reaches CH.
+    expose: ["8123", "9000"]
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:8123/ping"]
       interval: 5s
@@ -29,11 +28,27 @@ services:
   redis:
     image: redis:7.4-alpine
     container_name: oi-redis
-    command: ["redis-server", "--maxmemory", "2gb", "--maxmemory-policy", "allkeys-lru", "--appendonly", "yes"]
+    # `tcp-keepalive 60` keeps the pub/sub broadcaster connection
+    # alive across NAT timeouts on long-idle channels.
+    command:
+      - redis-server
+      - --maxmemory
+      - "2gb"
+      - --maxmemory-policy
+      - "allkeys-lru"
+      - --appendonly
+      - "yes"
+      - --tcp-keepalive
+      - "60"
+      - --tcp-backlog
+      - "4096"
+    sysctls:
+      # Higher SOMAXCONN inside the redis container — its accept
+      # queue would otherwise cap at 128, audible at 10k+ WS clients.
+      net.core.somaxconn: 4096
     volumes:
       - redis_data:/data
-    ports:
-      - "127.0.0.1:6379:6379"
+    expose: ["6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -56,6 +71,7 @@ services:
       OI_REDIS__URL: redis://redis:6379
     volumes:
       - ./collector.toml:/etc/oi/collector.toml:ro
+      - oi_wal:/var/lib/oi/wal
     restart: unless-stopped
 
   api:
@@ -63,7 +79,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
       target: api
-    container_name: oi-api
+    # No container_name so docker compose --scale api=N works.
     depends_on:
       clickhouse: { condition: service_healthy }
       redis:      { condition: service_healthy }
@@ -74,13 +90,40 @@ services:
       OI_API_REDIS__URL: redis://redis:6379
     volumes:
       - ./api.toml:/etc/oi/api.toml:ro
-    ports:
-      - "50051:50051"  # gRPC
-      - "8080:8080"    # REST
+      - /etc/oi/tls:/etc/oi/tls:ro
+    # ulimits so the tokio task pool can hold many WS file descriptors
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
+    expose: ["8080", "9091"]
+    # gRPC port still bound to host because nginx terminates TLS at
+    # nginx then proxies to oi-api over plaintext; the host:50051
+    # is unused for clients (they hit nginx:50051). Keep it expose-only.
     restart: unless-stopped
 
-  # ClickHouse backup sidecar — s3-compatible target.
-  # Configure with env vars from .env before running.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: oi-nginx
+    depends_on:
+      - api
+    ports:
+      - "80:80"          # ACME http-01 + HTTPS redirect
+      - "443:443"        # Public REST + WebSocket
+      - "50051:50051"    # Public gRPC (h2 over TLS)
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+      - nginx_cache:/var/cache/nginx
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
+    restart: unless-stopped
+
+  # ClickHouse backup sidecar — s3-compatible target (DO Spaces /
+  # AWS S3 / Backblaze B2). Set env in .env or skip the service.
   clickhouse-backup:
     image: altinity/clickhouse-backup:2.6.6
     container_name: oi-ch-backup
@@ -105,3 +148,5 @@ volumes:
   ch_data:
   ch_logs:
   redis_data:
+  nginx_cache:
+  oi_wal:

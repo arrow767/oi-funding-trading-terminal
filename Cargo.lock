@@ -1962,6 +1962,7 @@ dependencies = [
  "rust_decimal",
  "rust_decimal_macros",
  "rustls",
+ "scopeguard",
  "serde",
  "serde_json",
  "testcontainers",

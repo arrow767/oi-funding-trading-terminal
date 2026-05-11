@@ -100,6 +100,21 @@ async fn run_async() -> anyhow::Result<()> {
         }
     });
 
+    // ---- WebSocket broadcaster ----------------------------------------
+    // One Redis pub/sub subscriber per process; fans out to all WS
+    // clients via a broadcast channel. Spawned BEFORE the REST router
+    // so the channel is alive when the first WS upgrade lands.
+    let ws_snapshots =
+        crate::ws::spawn_pubsub_broadcaster(cfg.redis.url.clone());
+    let ws_state = crate::ws::WsState {
+        auth: if cfg.auth.enabled {
+            Some(auth_state.clone())
+        } else {
+            None
+        },
+        snapshots: ws_snapshots,
+    };
+
     // ---- REST --------------------------------------------------------
     let rest_state = rest::RestState {
         repo,
@@ -109,13 +124,16 @@ async fn run_async() -> anyhow::Result<()> {
     let cfg_for_rest = cfg.clone();
     let auth_for_rest = auth_state.clone();
     let rest_task = tokio::spawn(async move {
-        let mut router = rest::router(rest_state);
+        // WS routes live on the same Axum app as REST — they share
+        // the listener and TLS termination. Merge gives them
+        // independent state types.
+        let mut router = rest::router(rest_state).merge(crate::ws::router(ws_state));
         if cfg_for_rest.auth.enabled {
             router = router.layer(axum::middleware::from_fn_with_state(
                 auth_for_rest,
                 rest_auth_middleware,
             ));
-            info!("REST bearer auth enabled");
+            info!("REST + WS bearer auth enabled");
         }
         if cfg_for_rest.tls.enabled {
             let rustls_cfg = axum_server::tls_rustls::RustlsConfig::from_pem_file(

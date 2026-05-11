@@ -41,6 +41,7 @@ bytes = { workspace = true }
 tokio-stream = "0.1"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+scopeguard = "1.2"
 
 [dev-dependencies]
 clap = { workspace = true }
