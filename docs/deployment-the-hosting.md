@@ -149,7 +149,7 @@ docker compose version
 
 ```bash
 cd ~
-git clone https://github.com/arrow767/trading-terminal-price-allerts.git oi
+git clone https://github.com/arrow767/oi-funding-trading-terminal.git oi
 cd oi
 ls deploy/
 ```
