@@ -11,6 +11,10 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY . .
+# Cap parallelism: rustc+LLVM use ~1.5–2 GB per job during release
+# optimization, so on a 12 GB host (Aurum-class) -j8 risks OOM during
+# the linker pass. -j4 keeps peak around 6–8 GB. Bump if you have more.
+ENV CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0
 RUN cargo build --release --bin oi-collector --bin oi-api
 
 # --- collector -------------------------------------------------------------
