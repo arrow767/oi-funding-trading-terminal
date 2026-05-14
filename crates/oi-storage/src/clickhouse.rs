@@ -75,13 +75,28 @@ fn ch_err(e: ChError) -> CoreError {
     CoreError::Storage(format!("clickhouse: {e}"))
 }
 
-/// Split a SQL file on `;` boundaries that are at the end of a line. This is
-/// naive but sufficient for our hand-authored `migrations/*.sql` — it does
-/// not need to handle arbitrary SQL.
+/// Split a SQL file on `;` statement boundaries. Strips `--` line
+/// comments first so that semicolons inside comments (e.g. an English
+/// sentence with a `;` in it) aren't mistaken for statement separators
+/// — that was a real bug that fed ClickHouse half-statements starting
+/// with stray `)`.
+///
+/// Does NOT understand string literals or block `/* */` comments.
+/// Our hand-authored migrations don't use either, so this stays minimal.
 fn split_sql(sql: &str) -> Vec<String> {
-    sql.split(';')
+    let mut stripped = String::with_capacity(sql.len());
+    for line in sql.lines() {
+        let code = match line.find("--") {
+            Some(idx) => &line[..idx],
+            None => line,
+        };
+        stripped.push_str(code);
+        stripped.push('\n');
+    }
+    stripped
+        .split(';')
         .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty() && !s.lines().all(|l| l.trim_start().starts_with("--") || l.trim().is_empty()))
+        .filter(|s| !s.is_empty())
         .collect()
 }
 
@@ -527,5 +542,21 @@ mod tests {
         let sql = "CREATE TABLE a(x Int64) ENGINE=Memory;\n\n-- comment only\n;\nCREATE TABLE b(y Int64) ENGINE=Memory;";
         let parts = split_sql(sql);
         assert_eq!(parts.len(), 2);
+    }
+
+    #[test]
+    fn split_sql_ignores_semicolons_inside_line_comments() {
+        // Regression: this exact shape (a `;` inside a `--` comment between
+        // two CREATE TABLEs) used to make split_sql leak fragments to CH.
+        let sql = "\
+-- header: (note about A; and about B).
+CREATE TABLE a(x Int64) ENGINE=Memory;
+-- another with ; in it.
+CREATE TABLE b(y Int64) ENGINE=Memory;
+";
+        let parts = split_sql(sql);
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].contains("CREATE TABLE a"));
+        assert!(parts[1].contains("CREATE TABLE b"));
     }
 }
