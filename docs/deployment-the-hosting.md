@@ -1,8 +1,15 @@
-# Production deployment — the.hosting Aurum JP (или любой KVM с Ubuntu 24.04)
+# Production deployment — the.hosting Aurum JP
 
 Полный runbook для оси под 10–50k одновременных пользователей.
 Заточен под `Aurum` от **the.hosting** (Япония, 8 vCore / 12 GB RAM /
-150 GB NVMe), но любой KVM-сервер с Ubuntu 22.04+ подойдёт.
+150 GB NVMe). По умолчанию у the.hosting стоит **AlmaLinux 10**; команды
+ниже приведены для AlmaLinux/Rocky/RHEL 10 (`dnf`, `firewalld`).
+
+> **Рабочий профиль:** все команды выполняются от `root` без `sudo` и
+> без отдельного non-root пользователя. SSH остаётся открытым по паролю
+> и под root — компенсируем это `fail2ban` (см. §3). Если хочешь
+> классический non-root + sudo вариант — добавь `sudo` к командам и
+> создай пользователя руками; на остальной runbook это не влияет.
 
 Время на всё: **~90 минут**, из них ~15 минут на cargo build.
 
