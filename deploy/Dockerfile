@@ -1,7 +1,12 @@
 # Multi-stage build. Each binary is its own final image so we don't ship
 # the toolchain. `cargo chef` would speed up CI; kept minimal here.
 
-FROM rust:1.89-slim AS builder
+# Pin to bookworm so the resulting binaries link against glibc 2.36
+# — same version as the debian:bookworm-slim runtime stage. Without
+# the suffix `rust:1.89-slim` follows Debian's testing/stable rotation
+# and picks up glibc 2.38+ from trixie, which then ELF-fails at
+# runtime with `GLIBC_2.38 not found`.
+FROM rust:1.89-slim-bookworm AS builder
 WORKDIR /build
 
 # System deps needed by reqwest (rustls), clickhouse (LZ4).
