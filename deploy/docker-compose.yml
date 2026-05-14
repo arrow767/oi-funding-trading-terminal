@@ -14,7 +14,7 @@ services:
     volumes:
       - ch_data:/var/lib/clickhouse
       - ch_logs:/var/log/clickhouse-server
-      - ../migrations:/docker-entrypoint-initdb.d:ro
+      - ../migrations/single:/docker-entrypoint-initdb.d:ro
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: "1"
     # No public port — only the docker network reaches CH.

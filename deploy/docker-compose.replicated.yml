@@ -31,7 +31,7 @@ services:
     volumes:
       - ch1_data:/var/lib/clickhouse
       - ./clickhouse/server-1.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
-      - ../migrations:/docker-entrypoint-initdb.d:ro
+      - ../migrations/replicated:/docker-entrypoint-initdb.d:ro
 
   clickhouse-2:
     image: clickhouse/clickhouse-server:24.8
