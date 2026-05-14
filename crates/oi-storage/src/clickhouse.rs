@@ -54,9 +54,12 @@ impl ClickHouseRepo {
             .map_err(ch_err)
     }
 
-    /// Run `migrations/001_schema.sql`. Safe to re-run.
+    /// Run `migrations/single/001_schema.sql`. Safe to re-run.
+    /// (The replicated variant lives in migrations/replicated/; nodes
+    /// running in HA mode don't go through this path — ClickHouse's
+    /// docker-entrypoint-initdb.d does the cluster DDL on first boot.)
     pub async fn ensure_schema(&self) -> Result<()> {
-        let sql = include_str!("../../../migrations/001_schema.sql");
+        let sql = include_str!("../../../migrations/single/001_schema.sql");
         for statement in split_sql(sql) {
             self.client
                 .query(&statement)
