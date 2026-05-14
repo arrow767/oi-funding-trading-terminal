@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS oi.oi_minute
     oi_usd_low     Nullable(Decimal128(6))  CODEC(ZSTD(1)) ,
     oi_usd_close   Nullable(Decimal128(6))  CODEC(ZSTD(1)) ,
 
-    price_used_close Nullable(Decimal64(8)) CODEC(Gorilla, LZ4),
+    price_used_close Nullable(Decimal64(8)) CODEC(ZSTD(1)),
 
     ingest_ts      DateTime64(3, 'UTC') DEFAULT now64()   CODEC(Delta, LZ4)
 )
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS oi.funding_minute
     symbol           String,
     bucket_ts        DateTime64(3, 'UTC')         CODEC(Delta, LZ4),
     recv_ts          DateTime64(3, 'UTC')         CODEC(Delta, LZ4),
-    rate             Decimal64(12)                CODEC(Gorilla, LZ4),
+    rate             Decimal64(12)                CODEC(ZSTD(1))    ,
     next_funding_ts  Nullable(DateTime64(3, 'UTC')) CODEC(Delta, LZ4),
     interval_hours   Nullable(UInt8),
     ingest_ts        DateTime64(3, 'UTC') DEFAULT now64()  CODEC(Delta, LZ4)
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS oi.funding_event
     exchange       LowCardinality(String),
     symbol         String,
     settlement_ts  DateTime64(3, 'UTC')         CODEC(Delta, LZ4),
-    rate           Decimal64(12)                CODEC(Gorilla, LZ4),
+    rate           Decimal64(12)                CODEC(ZSTD(1))    ,
     mark_price     Nullable(Decimal128(8))      CODEC(ZSTD(1))    ,
     ingest_ts      DateTime64(3, 'UTC') DEFAULT now64()  CODEC(Delta, LZ4)
 )

@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS oi.oi_minute ON CLUSTER oi
 
     oi_coins       Nullable(Decimal128(18)) CODEC(ZSTD(1)),
     oi_usd         Nullable(Decimal128(6))  CODEC(ZSTD(1)) ,
-    price_used     Nullable(Decimal64(8))   CODEC(Gorilla, LZ4),
+    price_used     Nullable(Decimal64(8))   CODEC(ZSTD(1))   ,
 
     ingest_ts      DateTime64(3, 'UTC') DEFAULT now64()   CODEC(Delta, LZ4)
 )
