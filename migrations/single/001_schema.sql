@@ -47,20 +47,20 @@ CREATE TABLE IF NOT EXISTS oi.oi_minute
     samples        UInt32                 CODEC(T64, LZ4),
 
     native_unit    LowCardinality(String),
-    native_open    Decimal128(18)         CODEC(Gorilla, LZ4),
-    native_high    Decimal128(18)         CODEC(Gorilla, LZ4),
-    native_low     Decimal128(18)         CODEC(Gorilla, LZ4),
-    native_close   Decimal128(18)         CODEC(Gorilla, LZ4),
+    native_open    Decimal128(18)         CODEC(ZSTD(1)),
+    native_high    Decimal128(18)         CODEC(ZSTD(1)),
+    native_low     Decimal128(18)         CODEC(ZSTD(1)),
+    native_close   Decimal128(18)         CODEC(ZSTD(1)),
 
-    oi_coins_open  Nullable(Decimal128(18)) CODEC(Gorilla, LZ4),
-    oi_coins_high  Nullable(Decimal128(18)) CODEC(Gorilla, LZ4),
-    oi_coins_low   Nullable(Decimal128(18)) CODEC(Gorilla, LZ4),
-    oi_coins_close Nullable(Decimal128(18)) CODEC(Gorilla, LZ4),
+    oi_coins_open  Nullable(Decimal128(18)) CODEC(ZSTD(1)),
+    oi_coins_high  Nullable(Decimal128(18)) CODEC(ZSTD(1)),
+    oi_coins_low   Nullable(Decimal128(18)) CODEC(ZSTD(1)),
+    oi_coins_close Nullable(Decimal128(18)) CODEC(ZSTD(1)),
 
-    oi_usd_open    Nullable(Decimal128(6))  CODEC(Gorilla, LZ4),
-    oi_usd_high    Nullable(Decimal128(6))  CODEC(Gorilla, LZ4),
-    oi_usd_low     Nullable(Decimal128(6))  CODEC(Gorilla, LZ4),
-    oi_usd_close   Nullable(Decimal128(6))  CODEC(Gorilla, LZ4),
+    oi_usd_open    Nullable(Decimal128(6))  CODEC(ZSTD(1)) ,
+    oi_usd_high    Nullable(Decimal128(6))  CODEC(ZSTD(1)) ,
+    oi_usd_low     Nullable(Decimal128(6))  CODEC(ZSTD(1)) ,
+    oi_usd_close   Nullable(Decimal128(6))  CODEC(ZSTD(1)) ,
 
     price_used_close Nullable(Decimal64(8)) CODEC(Gorilla, LZ4),
 
@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS oi.funding_event
     symbol         String,
     settlement_ts  DateTime64(3, 'UTC')         CODEC(Delta, LZ4),
     rate           Decimal64(12)                CODEC(Gorilla, LZ4),
-    mark_price     Nullable(Decimal128(8))      CODEC(Gorilla, LZ4),
+    mark_price     Nullable(Decimal128(8))      CODEC(ZSTD(1))    ,
     ingest_ts      DateTime64(3, 'UTC') DEFAULT now64()  CODEC(Delta, LZ4)
 )
 ENGINE = ReplacingMergeTree(ingest_ts)

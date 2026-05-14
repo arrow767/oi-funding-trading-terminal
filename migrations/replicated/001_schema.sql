@@ -37,11 +37,11 @@ CREATE TABLE IF NOT EXISTS oi.oi_minute ON CLUSTER oi
     bucket_ts      DateTime64(3, 'UTC')   CODEC(Delta, LZ4),
     recv_ts        DateTime64(3, 'UTC')   CODEC(Delta, LZ4),
 
-    native_value   Decimal128(18)         CODEC(Gorilla, LZ4),
+    native_value   Decimal128(18)         CODEC(ZSTD(1)),
     native_unit    LowCardinality(String),
 
-    oi_coins       Nullable(Decimal128(18)) CODEC(Gorilla, LZ4),
-    oi_usd         Nullable(Decimal128(6))  CODEC(Gorilla, LZ4),
+    oi_coins       Nullable(Decimal128(18)) CODEC(ZSTD(1)),
+    oi_usd         Nullable(Decimal128(6))  CODEC(ZSTD(1)) ,
     price_used     Nullable(Decimal64(8))   CODEC(Gorilla, LZ4),
 
     ingest_ts      DateTime64(3, 'UTC') DEFAULT now64()   CODEC(Delta, LZ4)
