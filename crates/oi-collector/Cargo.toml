@@ -40,3 +40,7 @@ dotenvy = { workspace = true }
 clap = { workspace = true }
 parking_lot = { workspace = true }
 dashmap = { workspace = true }
+# Same rustls + provider as oi-api so install_default() works across
+# the workspace. Needed because rustls 0.23 requires the process to
+# explicitly pick a CryptoProvider before any TLS handshake.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }

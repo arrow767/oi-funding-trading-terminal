@@ -33,6 +33,12 @@ use tracing::{debug, error, info, warn};
 
 pub fn bootstrap() -> anyhow::Result<()> {
     init_tracing();
+    // rustls 0.23 requires the process to explicitly select a crypto
+    // provider before the first TLS handshake; otherwise reqwest /
+    // tokio-tungstenite / clickhouse panic at runtime. Ignore the
+    // result — `install_default()` returns Err only if a provider
+    // is already installed (e.g. via test harness), which is fine.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("oi-collector")
