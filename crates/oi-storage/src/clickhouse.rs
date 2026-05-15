@@ -75,6 +75,18 @@ fn ch_err(e: ChError) -> CoreError {
     CoreError::Storage(format!("clickhouse: {e}"))
 }
 
+/// Convert `OffsetDateTime` to Unix epoch milliseconds for binding into
+/// ClickHouse range queries. The `clickhouse` crate's default
+/// `Serialize` for `OffsetDateTime` produces a 9-tuple of component
+/// integers (year / ordinal-day / hour / ...), which CH refuses to
+/// compare against a `DateTime64(3, 'UTC')` column — the query bombs
+/// with ILLEGAL_TYPE_OF_ARGUMENT. Binding an i64 millis + wrapping the
+/// placeholder in `fromUnixTimestamp64Milli(?)` in SQL gives CH a
+/// native DateTime64 on its side of the comparison.
+fn unix_millis(t: OffsetDateTime) -> i64 {
+    (t.unix_timestamp_nanos() / 1_000_000) as i64
+}
+
 /// Split a SQL file on `;` statement boundaries. Strips `--` line
 /// comments first so that semicolons inside comments (e.g. an English
 /// sentence with a `;` in it) aren't mistaken for statement separators
@@ -168,7 +180,9 @@ struct FundingRow {
 const SELECT_FUNDING_RANGE: &str =
     "SELECT exchange, symbol, bucket_ts, recv_ts, rate, next_funding_ts, interval_hours \
      FROM oi.funding_minute \
-     WHERE exchange = ? AND symbol = ? AND bucket_ts >= ? AND bucket_ts < ? \
+     WHERE exchange = ? AND symbol = ? \
+       AND bucket_ts >= fromUnixTimestamp64Milli(?) \
+       AND bucket_ts <  fromUnixTimestamp64Milli(?) \
      ORDER BY bucket_ts";
 
 const SELECT_FUNDING_LATEST: &str =
@@ -190,7 +204,9 @@ struct FundingEventRow {
 const SELECT_EVENTS_RANGE: &str =
     "SELECT exchange, symbol, settlement_ts, rate, mark_price \
      FROM oi.funding_event \
-     WHERE exchange = ? AND symbol = ? AND settlement_ts >= ? AND settlement_ts < ? \
+     WHERE exchange = ? AND symbol = ? \
+       AND settlement_ts >= fromUnixTimestamp64Milli(?) \
+       AND settlement_ts <  fromUnixTimestamp64Milli(?) \
      ORDER BY settlement_ts";
 
 const SELECT_EVENT_LATEST: &str =
@@ -252,7 +268,9 @@ const SELECT_OHLC_COLUMNS: &str =
             oi_usd_open, oi_usd_high, oi_usd_low, oi_usd_close, \
             price_used_close \
      FROM oi.oi_minute \
-     WHERE exchange = ? AND symbol = ? AND bucket_ts >= ? AND bucket_ts < ? \
+     WHERE exchange = ? AND symbol = ? \
+       AND bucket_ts >= fromUnixTimestamp64Milli(?) \
+       AND bucket_ts <  fromUnixTimestamp64Milli(?) \
      ORDER BY bucket_ts";
 
 const SELECT_OHLC_LATEST: &str =
@@ -353,8 +371,8 @@ impl OiRepository for ClickHouseRepo {
             .query(SELECT_OHLC_COLUMNS)
             .bind(instrument.exchange.code())
             .bind(&instrument.symbol)
-            .bind(from)
-            .bind(to)
+            .bind(unix_millis(from))
+            .bind(unix_millis(to))
             .fetch_all::<OiRow>()
             .await
             .map_err(ch_err)?;
@@ -410,8 +428,8 @@ impl OiRepository for ClickHouseRepo {
             .query(SELECT_FUNDING_RANGE)
             .bind(instrument.exchange.code())
             .bind(&instrument.symbol)
-            .bind(from)
-            .bind(to)
+            .bind(unix_millis(from))
+            .bind(unix_millis(to))
             .fetch_all::<FundingRow>()
             .await
             .map_err(ch_err)?;
@@ -468,8 +486,8 @@ impl OiRepository for ClickHouseRepo {
             .query(SELECT_EVENTS_RANGE)
             .bind(instrument.exchange.code())
             .bind(&instrument.symbol)
-            .bind(from)
-            .bind(to)
+            .bind(unix_millis(from))
+            .bind(unix_millis(to))
             .fetch_all::<FundingEventRow>()
             .await
             .map_err(ch_err)?;
