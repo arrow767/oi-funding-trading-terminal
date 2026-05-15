@@ -6,6 +6,7 @@ pub mod grpc;
 pub mod metrics;
 pub mod rest;
 pub mod server;
+pub mod sysmetrics;
 pub mod ws;
 
 /// Generated proto types + gRPC client/server. Re-exported so

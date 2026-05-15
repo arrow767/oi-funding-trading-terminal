@@ -42,6 +42,10 @@ tokio-stream = "0.1"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 scopeguard = "1.2"
+# System metrics (CPU/RAM/disk/load) for the cloud admin monitoring
+# page. `default-features=false` + only the components we read keeps
+# the dependency surface minimal — no per-process scanning.
+sysinfo = { version = "0.32", default-features = false, features = ["system", "disk"] }
 
 [dev-dependencies]
 clap = { workspace = true }

@@ -49,6 +49,12 @@ pub fn router(state: RestState) -> Router {
             "/v1/funding/events/range/:exchange/:symbol",
             get(funding_event_range),
         )
+        // System resource metrics for the cloud admin monitoring page.
+        // Behind the same bearer middleware as the data routes.
+        .route(
+            "/v1/system/metrics",
+            get(crate::sysmetrics::system_metrics),
+        )
         .with_state(state)
 }
 
