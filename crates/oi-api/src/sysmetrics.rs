@@ -10,11 +10,13 @@
 //! again. A process-lifetime peak is kept in an atomic (centi-percent)
 //! so the page can show "peak since boot" without its own history.
 
-use axum::{http::StatusCode, response::IntoResponse, Json};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use sysinfo::{Disks, System};
+
+use crate::rest::RestState;
 
 /// Peak global CPU %, ×100 so it fits an integer atomic. Monotonic for
 /// the lifetime of the process; reset only by a restart.
@@ -27,6 +29,18 @@ pub struct SystemMetrics {
     cpu: CpuMetrics,
     mem: MemMetrics,
     disk: DiskMetrics,
+    /// Per-table ClickHouse on-disk breakdown ("what's eating the
+    /// disk"). Empty if the API wasn't wired with a CH client or the
+    /// query failed — the page degrades to just the OS-level disk bar.
+    tables: Vec<TableUsage>,
+}
+
+#[derive(Debug, Serialize)]
+struct TableUsage {
+    table: String,
+    rows: u64,
+    compressed_bytes: u64,
+    uncompressed_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,8 +76,27 @@ struct DiskMetrics {
 /// GET /v1/system/metrics — handler. Auth is enforced by the same
 /// bearer middleware as the data endpoints (the route is mounted
 /// behind it in `rest::router`).
-pub async fn system_metrics() -> impl IntoResponse {
+pub async fn system_metrics(State(state): State<RestState>) -> impl IntoResponse {
     let _t = crate::metrics::Timer::start("REST_SystemMetrics");
+
+    // ClickHouse per-table sizes — best-effort. A failure (CH down,
+    // no client) just yields an empty list; the OS disk bar still
+    // renders so the page never goes blank over a CH blip.
+    let tables = match state.clickhouse.as_ref() {
+        Some(ch) => match ch.table_sizes().await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|r| TableUsage {
+                    table: r.table,
+                    rows: r.rows,
+                    compressed_bytes: r.compressed,
+                    uncompressed_bytes: r.uncompressed,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        },
+        None => Vec::new(),
+    };
 
     let mut sys = System::new();
 
@@ -154,6 +187,7 @@ pub async fn system_metrics() -> impl IntoResponse {
             used_pct: mem_pct,
         },
         disk,
+        tables,
     };
     crate::metrics::inc_request("REST_SystemMetrics", "ok");
     (StatusCode::OK, Json(body))

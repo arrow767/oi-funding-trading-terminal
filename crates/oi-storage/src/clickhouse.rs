@@ -54,6 +54,28 @@ impl ClickHouseRepo {
             .map_err(ch_err)
     }
 
+    /// Per-table on-disk size breakdown for the `oi` database, newest
+    /// active parts only. Powers the cloud admin "Servers" page's
+    /// "what's eating my disk" panel. `compressed_bytes` is the real
+    /// number that matters for disk pressure; `uncompressed_bytes`
+    /// shows how well ZSTD/LZ4 is doing.
+    pub async fn table_sizes(&self) -> Result<Vec<TableSize>> {
+        self.client
+            .query(
+                "SELECT table, \
+                        sum(rows) AS rows, \
+                        sum(data_compressed_bytes)   AS compressed, \
+                        sum(data_uncompressed_bytes) AS uncompressed \
+                 FROM system.parts \
+                 WHERE active AND database = 'oi' \
+                 GROUP BY table \
+                 ORDER BY compressed DESC",
+            )
+            .fetch_all::<TableSize>()
+            .await
+            .map_err(ch_err)
+    }
+
     /// Run `migrations/single/001_schema.sql`. Safe to re-run.
     /// (The replicated variant lives in migrations/replicated/; nodes
     /// running in HA mode don't go through this path — ClickHouse's
@@ -73,6 +95,16 @@ impl ClickHouseRepo {
 
 fn ch_err(e: ChError) -> CoreError {
     CoreError::Storage(format!("clickhouse: {e}"))
+}
+
+/// One row of the per-table disk breakdown. Serialize so the API can
+/// hand it straight to the cloud admin without a re-map.
+#[derive(Debug, Clone, Row, Serialize, Deserialize)]
+pub struct TableSize {
+    pub table: String,
+    pub rows: u64,
+    pub compressed: u64,
+    pub uncompressed: u64,
 }
 
 /// Convert `OffsetDateTime` to Unix epoch milliseconds for binding into
