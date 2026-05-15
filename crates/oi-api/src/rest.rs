@@ -117,15 +117,26 @@ struct BarDto {
     price_used_close: Option<String>,
 }
 
+/// Format an `OffsetDateTime` as RFC 3339 (`2026-05-15T12:44:00Z`).
+/// `OffsetDateTime::to_string()` produces a non-standard
+/// space-separated form with a `+HH:MM:SS` offset that .NET's
+/// `DateTime.TryParse` rejects; clients dropped every bar on parse
+/// before this helper landed. RFC 3339 is what every JSON consumer
+/// in the ecosystem (browsers, .NET, Python, Go) handles natively.
+fn ts_rfc3339(t: time::OffsetDateTime) -> String {
+    t.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| t.to_string())
+}
+
 impl From<oi_core::OiSnapshot> for BarDto {
     fn from(s: oi_core::OiSnapshot) -> Self {
         let opt = |o: Option<rust_decimal::Decimal>| o.map(|d| d.to_string());
         Self {
             exchange: s.instrument.exchange.code().to_owned(),
             symbol: s.instrument.symbol,
-            bucket_ts: s.bucket_ts.to_string(),
-            first_recv_ts: s.first_recv_ts.to_string(),
-            last_recv_ts: s.last_recv_ts.to_string(),
+            bucket_ts: ts_rfc3339(s.bucket_ts),
+            first_recv_ts: ts_rfc3339(s.first_recv_ts),
+            last_recv_ts: ts_rfc3339(s.last_recv_ts),
             samples: s.samples,
             native_unit: match s.native_unit {
                 oi_core::UnitKind::Coins => "coins",
@@ -234,10 +245,10 @@ impl From<oi_core::funding::FundingBar> for FundingDto {
         Self {
             exchange: b.instrument.exchange.code().to_owned(),
             symbol: b.instrument.symbol,
-            bucket_ts: b.bucket_ts.to_string(),
-            recv_ts: b.recv_ts.to_string(),
+            bucket_ts: ts_rfc3339(b.bucket_ts),
+            recv_ts: ts_rfc3339(b.recv_ts),
             rate: b.rate.to_string(),
-            next_funding_ts: b.next_funding_ts.map(|t| t.to_string()),
+            next_funding_ts: b.next_funding_ts.map(ts_rfc3339),
             interval_hours: b.interval_hours,
         }
     }
@@ -310,7 +321,7 @@ impl From<oi_core::funding::FundingEvent> for FundingEventDto {
         Self {
             exchange: e.instrument.exchange.code().to_owned(),
             symbol: e.instrument.symbol,
-            settlement_ts: e.settlement_ts.to_string(),
+            settlement_ts: ts_rfc3339(e.settlement_ts),
             rate: e.rate.to_string(),
             mark_price: e.mark_price.map(|d| d.to_string()),
         }
