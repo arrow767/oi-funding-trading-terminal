@@ -28,6 +28,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/oi-collector /usr/local/bin/oi-collector
 COPY --from=builder /build/migrations /opt/oi/migrations
+# Pre-create the WAL directory owned by `nobody` so that when a docker
+# named volume is mounted here for the first time, the volume copies
+# this ownership/permission. Without the chown the volume would be
+# root:root and `nobody` would fail every WAL write with EACCES — and
+# WAL failures break every minute-flush, so the OI table stays empty.
+# Numeric ids because the `nobody` shell user doesn't have a stable
+# uid across distros (Debian uses 65534).
+RUN mkdir -p /var/lib/oi/wal && chown -R 65534:65534 /var/lib/oi
 USER nobody
 ENTRYPOINT ["/usr/local/bin/oi-collector"]
 
