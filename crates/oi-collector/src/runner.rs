@@ -550,19 +550,27 @@ async fn run_exchange_loop(
         // Funding rate — best-effort, separate write path. No WAL,
         // no aggregator (per-minute single value, no OHLC) — funding
         // is cheap to re-fetch on the next tick if a write fails.
+        // Logs are explicit at every branch: silent "Ok(empty)" hid
+        // a bug where the funding_minute table stayed empty for days
+        // because nobody could tell whether the adapter returned 0
+        // bars or the upsert was silently choking.
         match adapter.fetch_funding(&ids, tick.bucket_ts).await {
             Ok(funding) if !funding.is_empty() => {
+                let count = funding.len();
                 if let Err(e) = repo.upsert_funding(&funding).await {
                     let is_follower_skip = lease.as_ref().map_or(false, |l| !l.is_leader())
                         && e.to_string().contains("not leader");
                     if !is_follower_skip {
-                        warn!(%exchange, error=%e, "funding upsert failed");
+                        warn!(%exchange, error=%e, count, "funding upsert failed");
                     }
                 } else {
-                    crate::metrics::inc_funding(exchange.code(), funding.len() as u64);
+                    crate::metrics::inc_funding(exchange.code(), count as u64);
+                    info!(%exchange, wrote = count, "funding minute written");
                 }
             }
-            Ok(_) => {}
+            Ok(_) => {
+                info!(%exchange, "funding fetch returned 0 bars (adapter ok but no rates in response)");
+            }
             Err(e) => {
                 crate::metrics::inc_rest_error(exchange.code(), classify_err(&e));
                 warn!(%exchange, error=%e, "funding fetch failed");
