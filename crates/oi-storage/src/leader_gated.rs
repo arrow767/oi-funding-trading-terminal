@@ -78,6 +78,57 @@ impl OiRepository for LeaderGatedRepo {
     async fn latest(&self, instrument: &InstrumentId) -> Result<Option<OiSnapshot>> {
         self.inner.latest(instrument).await
     }
+
+    // Funding — same leader-gate as snapshot upserts on the write
+    // path, transparent passthrough on reads. Without these explicit
+    // overrides the trait defaults swallow funding writes silently
+    // (return Ok with nothing written) and return None for every
+    // funding read, which surfaced as "no funding data" 404s even
+    // when the collector logged 'funding minute written wrote=N'.
+    async fn upsert_funding(&self, bars: &[oi_core::funding::FundingBar]) -> Result<()> {
+        if (self.is_leader)() { self.inner.upsert_funding(bars).await }
+        else { Err(CoreError::Storage("not leader".into())) }
+    }
+
+    async fn funding_range(
+        &self,
+        instrument: &InstrumentId,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<oi_core::funding::FundingBar>> {
+        self.inner.funding_range(instrument, from, to).await
+    }
+
+    async fn latest_funding(
+        &self,
+        instrument: &InstrumentId,
+    ) -> Result<Option<oi_core::funding::FundingBar>> {
+        self.inner.latest_funding(instrument).await
+    }
+
+    async fn upsert_funding_events(
+        &self,
+        events: &[oi_core::funding::FundingEvent],
+    ) -> Result<()> {
+        if (self.is_leader)() { self.inner.upsert_funding_events(events).await }
+        else { Err(CoreError::Storage("not leader".into())) }
+    }
+
+    async fn funding_events_range(
+        &self,
+        instrument: &InstrumentId,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<oi_core::funding::FundingEvent>> {
+        self.inner.funding_events_range(instrument, from, to).await
+    }
+
+    async fn latest_funding_event(
+        &self,
+        instrument: &InstrumentId,
+    ) -> Result<Option<oi_core::funding::FundingEvent>> {
+        self.inner.latest_funding_event(instrument).await
+    }
 }
 
 #[cfg(test)]

@@ -400,6 +400,51 @@ impl OiRepository for WalBacked {
     ) -> Result<Option<OiSnapshot>> {
         self.inner.latest(instrument).await
     }
+
+    // Funding doesn't go through the WAL — it's cheap to refetch on
+    // the next tick and not durability-critical. But we MUST forward
+    // to inner explicitly: the OiRepository trait's default funding
+    // methods are silent no-ops (return Ok with nothing written /
+    // Ok(None) for reads), which previously made every funding write
+    // disappear and every funding read return 404 even though the
+    // collector logged 'funding minute written wrote=N'.
+    async fn upsert_funding(&self, bars: &[oi_core::funding::FundingBar]) -> Result<()> {
+        self.inner.upsert_funding(bars).await
+    }
+    async fn funding_range(
+        &self,
+        instrument: &oi_core::instrument::InstrumentId,
+        from: time::OffsetDateTime,
+        to: time::OffsetDateTime,
+    ) -> Result<Vec<oi_core::funding::FundingBar>> {
+        self.inner.funding_range(instrument, from, to).await
+    }
+    async fn latest_funding(
+        &self,
+        instrument: &oi_core::instrument::InstrumentId,
+    ) -> Result<Option<oi_core::funding::FundingBar>> {
+        self.inner.latest_funding(instrument).await
+    }
+    async fn upsert_funding_events(
+        &self,
+        events: &[oi_core::funding::FundingEvent],
+    ) -> Result<()> {
+        self.inner.upsert_funding_events(events).await
+    }
+    async fn funding_events_range(
+        &self,
+        instrument: &oi_core::instrument::InstrumentId,
+        from: time::OffsetDateTime,
+        to: time::OffsetDateTime,
+    ) -> Result<Vec<oi_core::funding::FundingEvent>> {
+        self.inner.funding_events_range(instrument, from, to).await
+    }
+    async fn latest_funding_event(
+        &self,
+        instrument: &oi_core::instrument::InstrumentId,
+    ) -> Result<Option<oi_core::funding::FundingEvent>> {
+        self.inner.latest_funding_event(instrument).await
+    }
 }
 
 /// Spawn the background drainer. Every `interval` it walks pending
