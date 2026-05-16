@@ -441,8 +441,12 @@ async fn run_exchange_loop(
     let mut refresh_meta = tokio::time::interval(Duration::from_secs(6 * 3600));
     refresh_meta.tick().await; // skip immediate
 
+    // Stateful so an overrunning iteration cannot make us silently skip
+    // the minute that elapsed during the overrun (see scheduler.rs).
+    let mut sched = scheduler::MinuteScheduler::new(Duration::from_secs(2));
+
     loop {
-        let tick = scheduler::next_tick(Duration::from_secs(2)).await;
+        let tick = sched.next().await;
         let ids: Vec<InstrumentId> = metas
             .iter()
             .filter(|m| m.active)
