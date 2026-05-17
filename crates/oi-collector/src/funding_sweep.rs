@@ -67,14 +67,17 @@ pub fn spawn_funding_sweep(
 }
 
 /// Minimum wall-clock gap between launching two per-symbol funding-
-/// history requests. Binance's WAF/abuse layer (NOT the JSON weight
-/// limiter — it returns a bare HTML "403 Forbidden") blocks a tight
-/// burst of ~570 requests from one IP. It 403-blocked the burst TAIL
-/// every cycle, so the same later symbols (e.g. AIAUSDT) never
-/// advanced while the early ones stayed fresh. ~8 req/s steady stays
-/// under the abuse threshold; even the largest universe (~900 syms)
-/// then finishes in ~2 min — trivial against the 30-min cadence.
-const SPAWN_SPACING: Duration = Duration::from_millis(120);
+/// history requests. Binance's abuse layer (NOT the JSON weight
+/// limiter — it returns a bare HTML "403 Forbidden" IP auto-ban)
+/// trips on the sweep's burst stacked on top of the always-running
+/// OI minute loop (~10 req/s, which Binance tolerates fine on its
+/// own). The shared client governor allows 30 req/s, so the sweep
+/// needs its OWN hard throttle. 1 req/s makes the sweep's added load
+/// negligible: a full ~600-symbol backlog still clears in ~10 min
+/// (one-off), and once the due-gate kicks in each cycle only touches
+/// the handful of symbols that actually settled — trivial vs the
+/// 30-min cadence, and the ban never triggers again.
+const SPAWN_SPACING: Duration = Duration::from_millis(1000);
 
 /// A symbol whose latest stored settlement is fresher than this can't
 /// have a new one yet (shortest interval anywhere is Hyperliquid's
