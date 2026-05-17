@@ -66,6 +66,16 @@ pub fn spawn_funding_sweep(
     })
 }
 
+/// Minimum wall-clock gap between launching two per-symbol funding-
+/// history requests. Binance's WAF/abuse layer (NOT the JSON weight
+/// limiter — it returns a bare HTML "403 Forbidden") blocks a tight
+/// burst of ~570 requests from one IP. It 403-blocked the burst TAIL
+/// every cycle, so the same later symbols (e.g. AIAUSDT) never
+/// advanced while the early ones stayed fresh. ~8 req/s steady stays
+/// under the abuse threshold; even the largest universe (~900 syms)
+/// then finishes in ~2 min — trivial against the 30-min cadence.
+const SPAWN_SPACING: Duration = Duration::from_millis(120);
+
 #[derive(Debug, Default)]
 struct SweepStats {
     events: u64,
@@ -99,6 +109,7 @@ async fn sweep_once(
 
     for _ in 0..concurrency {
         if let Some(inst) = iter.next() {
+            tokio::time::sleep(SPAWN_SPACING).await;
             stream.push(tokio::spawn(prime(inst)));
         }
     }
@@ -107,6 +118,7 @@ async fn sweep_once(
     let mut batch: Vec<FundingEvent> = Vec::new();
     while let Some(joined) = stream.next().await {
         if let Some(inst) = iter.next() {
+            tokio::time::sleep(SPAWN_SPACING).await;
             stream.push(tokio::spawn(prime(inst)));
         }
         match joined {

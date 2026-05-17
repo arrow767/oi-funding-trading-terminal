@@ -330,8 +330,17 @@ impl ExchangeAdapter for BybitAdapter {
             self.base_url, instrument.symbol
         );
         if let Some(s) = since {
+            // Bybit's funding/history rejects startTime UNLESS endTime
+            // is also supplied: a lone startTime → retCode 10001
+            // "params error: Time Is Invalid", which failed EVERY
+            // incremental sweep (the cold backfill has no `since`, so
+            // it worked once — then every cursor-driven cycle 100%
+            // failed and bybit funding silently stopped advancing).
+            // Pass endTime = now; Bybit clamps the window to its 200-row
+            // page so a wide span is harmless.
             let ms = s.unix_timestamp_nanos() / 1_000_000;
-            url.push_str(&format!("&startTime={ms}"));
+            let now_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
+            url.push_str(&format!("&startTime={ms}&endTime={now_ms}"));
         }
         #[derive(Debug, Deserialize)]
         struct Row {
