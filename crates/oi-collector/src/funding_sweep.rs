@@ -76,6 +76,13 @@ pub fn spawn_funding_sweep(
 /// then finishes in ~2 min — trivial against the 30-min cadence.
 const SPAWN_SPACING: Duration = Duration::from_millis(120);
 
+/// A symbol whose latest stored settlement is fresher than this can't
+/// have a new one yet (shortest interval anywhere is Hyperliquid's
+/// 1 h), so the sweep skips its HTTP call. 50 min < 1 h leaves margin
+/// for early/jittered settlements while still skipping the vast
+/// majority of the every-cycle re-requests that tripped Binance's WAF.
+const NOT_DUE_BEFORE: time::Duration = time::Duration::minutes(50);
+
 #[derive(Debug, Default)]
 struct SweepStats {
     events: u64,
@@ -103,6 +110,21 @@ async fn sweep_once(
                     None
                 }
             };
+            // Due-gate: the shortest funding interval anywhere is 1 h
+            // (Hyperliquid; most venues 4-8 h). If the last stored
+            // settlement is fresher than NOT_DUE_BEFORE there cannot be
+            // a new one yet, so skip the HTTP call entirely. This is
+            // safe — the cursor is persistent and the fetch idempotent,
+            // so a settlement is still picked up on the first sweep
+            // after it's actually due (≤ one 30-min cycle late, same as
+            // before). It cuts steady-state request volume ~16x, which
+            // is what stops Binance's WAF returning bare 403s for the
+            // burst tail (symbols like AIAUSDT that never advanced).
+            if let Some(s) = since {
+                if OffsetDateTime::now_utc() - s < NOT_DUE_BEFORE {
+                    return Ok(Vec::new());
+                }
+            }
             adapter.fetch_funding_history(&inst, since).await
         }
     };
