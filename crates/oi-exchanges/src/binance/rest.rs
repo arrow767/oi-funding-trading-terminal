@@ -48,9 +48,23 @@ impl BinanceUsdmAdapter {
     /// swap `fapi.binance.com` for a local `wiremock` server. In
     /// production use `new()`.
     pub fn with_base_url(base_url: impl Into<String>) -> Result<Self, ExchangeError> {
-        // 20 rps avg, 40 burst — conservative. If we later want to push
-        // harder, raise these after measuring real IP weight usage.
-        let http = RateLimitedClient::new("binance", 20, 40)?;
+        // 30 rps avg, 40 burst. The per-minute load is ~570 sequential
+        // `/fapi/v1/openInterest` calls (one per symbol — Binance has no
+        // bulk current-OI endpoint; prices+funding are a single bulk
+        // `/fapi/v1/premiumIndex` each, negligible). At 20 rps that was
+        // ~28s/cycle with zero headroom: any latency spike pushed the
+        // cycle past the 60s minute boundary, and once the collector
+        // loop was behind it ran cycles back-to-back with no inter-cycle
+        // sleep → sustained max-rate hammering → Binance throttling → an
+        // unbounded lag spiral (observed: 21min behind and growing).
+        // 30 rps → ~19s/cycle (~3x headroom under 60s) so a spike stays
+        // sub-minute, the scheduler keeps sleeping between cycles, the
+        // spiral never starts, and no minute is ever dropped. 30 rps is
+        // ~75% of Binance's ~40/s fapi IP allowance (openInterest weight
+        // 1) — deliberate margin: an IP ban is the worst data-loss event
+        // and the priority here is "never lose a minute". Raise further
+        // only after measuring real weight headroom under peak symbols.
+        let http = RateLimitedClient::new("binance", 30, 40)?;
         Ok(Self {
             http,
             base_url: base_url.into(),
