@@ -10,10 +10,13 @@ use crate::price_provider::InMemoryPriceProvider;
 use crate::scheduler;
 use oi_core::{
     exchange::Exchange,
+    funding::FundingEvent,
     instrument::InstrumentId,
     snapshot::OiSample,
     traits::{ExchangeAdapter, OiRepository},
 };
+use rust_decimal::Decimal;
+use time::OffsetDateTime;
 use oi_exchanges::{
     aster::AsterAdapter, binance::BinanceUsdmAdapter, bingx::BingXAdapter,
     bitget::BitgetAdapter, bybit::BybitAdapter, hyperliquid::HyperliquidAdapter,
@@ -445,6 +448,20 @@ async fn run_exchange_loop(
     // the minute that elapsed during the overrun (see scheduler.rs).
     let mut sched = scheduler::MinuteScheduler::new(Duration::from_secs(2));
 
+    // Live settlement-event derivation. Per symbol we remember the
+    // last-seen next_funding_ts and the predicted rate observed just
+    // before it. When next_funding_ts rolls FORWARD we know a
+    // settlement occurred at the OLD boundary, and the rate that was
+    // actually paid is the last predicted rate we held for it. This
+    // makes funding-event markers live + lag-free for EVERY venue
+    // using only the per-minute funding stream we already collect
+    // (premiumIndex/tickers) — zero calls to the per-symbol funding-
+    // history endpoint, which Binance WAF-bans this IP for under the
+    // sweep's load. Bounded by the active universe, overwritten in
+    // place; no unbounded growth.
+    let mut funding_cursor: HashMap<InstrumentId, (OffsetDateTime, Decimal)> =
+        HashMap::new();
+
     loop {
         let tick = sched.next().await;
         let ids: Vec<InstrumentId> = metas
@@ -561,6 +578,47 @@ async fn run_exchange_loop(
         match adapter.fetch_funding(&ids, tick.bucket_ts).await {
             Ok(funding) if !funding.is_empty() => {
                 let count = funding.len();
+
+                // Derive settlement events from next_funding_ts roll-
+                // overs (see funding_cursor above). Independent of the
+                // funding_minute write below — events are what drives
+                // the "funding paid here" markers and must stay live.
+                let mut events: Vec<FundingEvent> = Vec::new();
+                for bar in &funding {
+                    let Some(next) = bar.next_funding_ts else {
+                        continue;
+                    };
+                    if let Some((prev_next, prev_rate)) =
+                        funding_cursor.get(&bar.instrument).copied()
+                    {
+                        if next > prev_next {
+                            events.push(FundingEvent {
+                                instrument: bar.instrument.clone(),
+                                settlement_ts: prev_next,
+                                rate: prev_rate,
+                                mark_price: None,
+                            });
+                        }
+                    }
+                    funding_cursor
+                        .insert(bar.instrument.clone(), (next, bar.rate));
+                }
+                if !events.is_empty() {
+                    let n = events.len();
+                    if let Err(e) = repo.upsert_funding_events(&events).await {
+                        let is_follower_skip = lease
+                            .as_ref()
+                            .map_or(false, |l| !l.is_leader())
+                            && e.to_string().contains("not leader");
+                        if !is_follower_skip {
+                            warn!(%exchange, error=%e, count=n, "derived funding events upsert failed");
+                        }
+                    } else {
+                        crate::metrics::inc_funding_events(exchange.code(), n as u64);
+                        info!(%exchange, events=n, "settlement events derived from stream");
+                    }
+                }
+
                 if let Err(e) = repo.upsert_funding(&funding).await {
                     let is_follower_skip = lease.as_ref().map_or(false, |l| !l.is_leader())
                         && e.to_string().contains("not leader");

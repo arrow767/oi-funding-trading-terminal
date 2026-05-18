@@ -14,6 +14,7 @@
 
 use futures::{stream::FuturesUnordered, StreamExt};
 use oi_core::{
+    error::ExchangeError,
     funding::FundingEvent,
     instrument::InstrumentId,
     traits::{ExchangeAdapter, OiRepository},
@@ -47,6 +48,7 @@ pub fn spawn_funding_sweep(
             // pressure on the (idempotent) storage. The lease's
             // own writes pay for the catch-up.
             let is_leader = lease.as_ref().map_or(true, |l| l.is_leader());
+            let mut next_sleep = interval;
             if is_leader {
                 let ids: Vec<InstrumentId> = instruments.read().clone();
                 let stats = sweep_once(&adapter, &repo, &ids, concurrency).await;
@@ -55,13 +57,29 @@ pub fn spawn_funding_sweep(
                     instruments = ids.len(),
                     new_events = stats.events,
                     failures = stats.failures,
+                    auth_failures = stats.auth_failures,
                     "funding sweep cycle complete"
                 );
                 crate::metrics::inc_funding_events(exchange.code(), stats.events);
+                if stats.auth_failures >= WAF_BAN_THRESHOLD {
+                    // Venue is WAF-banning this IP on the history
+                    // endpoint. Hammering it every 30 min just keeps
+                    // the ban fresh; back the whole venue off so it
+                    // expires. Ongoing settlement markers don't depend
+                    // on this — they're derived live from the per-
+                    // minute funding stream (see runner.rs).
+                    warn!(
+                        %exchange,
+                        auth_failures = stats.auth_failures,
+                        cooldown_secs = WAF_COOLDOWN.as_secs(),
+                        "funding sweep: venue WAF-banning history endpoint; backing off"
+                    );
+                    next_sleep = WAF_COOLDOWN;
+                }
             } else {
                 debug!(%exchange, "funding sweep skipped (follower)");
             }
-            tokio::time::sleep(interval).await;
+            tokio::time::sleep(next_sleep).await;
         }
     })
 }
@@ -86,10 +104,22 @@ const SPAWN_SPACING: Duration = Duration::from_millis(1000);
 /// majority of the every-cycle re-requests that tripped Binance's WAF.
 const NOT_DUE_BEFORE: time::Duration = time::Duration::minutes(50);
 
+/// When a sweep cycle records at least this many auth/forbidden
+/// failures the venue is actively WAF-banning this IP for the
+/// history endpoint (Binance does this under load). Re-hitting it
+/// every 30 min just keeps the ban fresh, so we back the WHOLE venue
+/// off for COOLDOWN to let the ban expire. Ongoing events are
+/// unaffected — they're derived live from the per-minute funding
+/// stream in runner.rs; the sweep is only deep cold-history backfill.
+const WAF_BAN_THRESHOLD: u64 = 20;
+const WAF_COOLDOWN: Duration = Duration::from_secs(4 * 3600);
+
 #[derive(Debug, Default)]
 struct SweepStats {
     events: u64,
     failures: u64,
+    /// Subset of `failures` that were auth/forbidden (WAF ban).
+    auth_failures: u64,
 }
 
 async fn sweep_once(
@@ -153,6 +183,9 @@ async fn sweep_once(
             }
             Ok(Err(e)) => {
                 stats.failures += 1;
+                if matches!(e, ExchangeError::Auth(_)) {
+                    stats.auth_failures += 1;
+                }
                 debug!(error=%e, "funding sweep: per-symbol fetch failed");
             }
             Ok(Ok(events)) if events.is_empty() => {}
