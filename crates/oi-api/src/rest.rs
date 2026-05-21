@@ -5,14 +5,28 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::get,
+    routing::{get, post},
     Router,
 };
+use futures::stream::{FuturesUnordered, StreamExt};
 use oi_core::{exchange::Exchange, instrument::InstrumentId, traits::OiRepository};
 use oi_storage::{clickhouse::ClickHouseRepo, redis::RedisCache};
 use serde::{Deserialize, Serialize};
 use std::{str::FromStr, sync::Arc};
 use time::OffsetDateTime;
+
+/// Maximum items the server will accept in a single batch range request.
+/// Above this the request is rejected outright (400) — protects against a
+/// client accidentally (or maliciously) fanning out hundreds of CH queries
+/// per request. 128 covers every realistic UI scenario (a dashboard with
+/// dozens of OI/Funding panels).
+const BATCH_MAX_ITEMS: usize = 128;
+
+/// Bound on how many per-item repo queries we run concurrently inside a
+/// single batch. Keeps ClickHouse from drowning when one client sends a
+/// big batch. Result order is preserved by index regardless of completion
+/// order, so callers can match results to their inputs.
+const BATCH_CONCURRENCY: usize = 16;
 
 #[derive(Clone)]
 pub struct RestState {
@@ -48,6 +62,18 @@ pub fn router(state: RestState) -> Router {
         .route(
             "/v1/funding/events/range/:exchange/:symbol",
             get(funding_event_range),
+        )
+        // Batch range endpoints — the terminal coalesces every active
+        // panel's `EnsureSeriesRange`/`EnsureFundingSeriesRange` calls
+        // landing within a short window (~30 ms) into ONE POST request
+        // each, so opening a 6-pane workspace touches the server with
+        // 1 RTT instead of 6. Single-pane callers still use the GET
+        // routes above.
+        .route("/v1/oi/range/batch", post(range_batch))
+        .route("/v1/funding/range/batch", post(funding_range_batch))
+        .route(
+            "/v1/funding/events/range/batch",
+            post(funding_event_range_batch),
         )
         // System resource metrics for the cloud admin monitoring page.
         // Behind the same bearer middleware as the data routes.
@@ -385,4 +411,208 @@ async fn funding_event_range(
             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+// ── batch range endpoints ────────────────────────────────────────────────
+//
+// Three POST handlers mirroring the single-instrument GETs above. Each
+// accepts a `RangeBatchRequest { items: [...] }` body and returns a
+// `RangeBatchResponse { results: [...] }` whose entries are in the SAME
+// order as the input items — the client matches results by index. A
+// per-item `error` field carries parse / repo failures so one bad input
+// doesn't kill the whole batch.
+
+#[derive(Deserialize)]
+struct RangeBatchItem {
+    exchange: String,
+    symbol: String,
+    from: String,
+    to: String,
+}
+
+#[derive(Deserialize)]
+struct RangeBatchRequest {
+    items: Vec<RangeBatchItem>,
+}
+
+#[derive(Serialize)]
+struct RangeBatchResponse<T> {
+    results: Vec<BatchEntry<T>>,
+}
+
+#[derive(Serialize)]
+struct BatchEntry<T> {
+    exchange: String,
+    symbol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    bars: Vec<T>,
+}
+
+/// Validate every item's `(exchange, symbol, from, to)`. Returns either
+/// the full parsed list (in order) or 400 with the first parse error.
+/// Empty / oversize batches are also rejected here.
+fn parse_batch(req: &RangeBatchRequest)
+    -> Result<Vec<(InstrumentId, OffsetDateTime, OffsetDateTime)>, (StatusCode, String)>
+{
+    if req.items.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "items: empty".to_owned()));
+    }
+    if req.items.len() > BATCH_MAX_ITEMS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("items: {} exceeds max {}", req.items.len(), BATCH_MAX_ITEMS),
+        ));
+    }
+    let mut parsed = Vec::with_capacity(req.items.len());
+    for (i, it) in req.items.iter().enumerate() {
+        let id = parse_id(&it.exchange, &it.symbol)
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("items[{i}]: {e}")))?;
+        let from = parse_rfc3339(&it.from)
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("items[{i}].from: {e}")))?;
+        let to = parse_rfc3339(&it.to)
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("items[{i}].to: {e}")))?;
+        parsed.push((id, from, to));
+    }
+    Ok(parsed)
+}
+
+/// Fan out per-item queries with bounded concurrency, preserving input
+/// order. `query` runs the repo call; `to_dto` maps the row type to the
+/// DTO. Per-item errors land in the response's `error` field and are
+/// logged, but never abort the batch.
+async fn run_batch<T, U, FQuery, Fut, FMap>(
+    items: Vec<(InstrumentId, OffsetDateTime, OffsetDateTime)>,
+    query: FQuery,
+    to_dto: FMap,
+) -> Vec<BatchEntry<U>>
+where
+    FQuery: Fn(InstrumentId, OffsetDateTime, OffsetDateTime) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = oi_core::error::Result<Vec<T>>> + Send,
+    FMap: Fn(T) -> U + Send + Sync + 'static + Copy,
+    T: Send + 'static,
+    U: Send + 'static,
+{
+    use std::pin::Pin;
+    type ItemResult<T> = (usize, String, String, oi_core::error::Result<Vec<T>>);
+
+    let total = items.len();
+    let query = Arc::new(query);
+    let mut results: Vec<Option<BatchEntry<U>>> = (0..total).map(|_| None).collect();
+    // Box::pin erases the unique per-async-block type so FuturesUnordered
+    // can hold an arbitrary mix of priming / refill futures.
+    let mut inflight: FuturesUnordered<Pin<Box<dyn std::future::Future<Output = ItemResult<T>> + Send>>>
+        = FuturesUnordered::new();
+    let mut next = 0usize;
+
+    let spawn_one = |idx: usize, item: &(InstrumentId, OffsetDateTime, OffsetDateTime)|
+        -> Pin<Box<dyn std::future::Future<Output = ItemResult<T>> + Send>>
+    {
+        let (id, from, to) = item.clone();
+        let ex = id.exchange.code().to_owned();
+        let sym = id.symbol.clone();
+        let q = query.clone();
+        Box::pin(async move {
+            let out = (*q)(id, from, to).await;
+            (idx, ex, sym, out)
+        })
+    };
+
+    // Prime the in-flight set up to the fan-out cap.
+    while next < total && inflight.len() < BATCH_CONCURRENCY {
+        inflight.push(spawn_one(next, &items[next]));
+        next += 1;
+    }
+
+    while let Some((idx, exchange, symbol, out)) = inflight.next().await {
+        let entry = match out {
+            Ok(rows) => BatchEntry {
+                exchange,
+                symbol,
+                error: None,
+                bars: rows.into_iter().map(to_dto).collect(),
+            },
+            Err(e) => BatchEntry {
+                exchange,
+                symbol,
+                error: Some(e.to_string()),
+                bars: Vec::new(),
+            },
+        };
+        results[idx] = Some(entry);
+
+        if next < total {
+            inflight.push(spawn_one(next, &items[next]));
+            next += 1;
+        }
+    }
+
+    // All slots filled by the loop above.
+    results.into_iter().map(|o| o.expect("batch slot")).collect()
+}
+
+async fn range_batch(
+    State(state): State<RestState>,
+    Json(req): Json<RangeBatchRequest>,
+) -> impl IntoResponse {
+    let _t = crate::metrics::Timer::start("REST_RangeBatch");
+    let items = match parse_batch(&req) {
+        Ok(v) => v,
+        Err((code, msg)) => return (code, msg).into_response(),
+    };
+    let repo = state.repo.clone();
+    let results = run_batch(
+        items,
+        move |id, from, to| {
+            let repo = repo.clone();
+            async move { repo.range(&id, from, to).await }
+        },
+        BarDto::from,
+    )
+    .await;
+    Json(RangeBatchResponse { results }).into_response()
+}
+
+async fn funding_range_batch(
+    State(state): State<RestState>,
+    Json(req): Json<RangeBatchRequest>,
+) -> impl IntoResponse {
+    let _t = crate::metrics::Timer::start("REST_FundingRangeBatch");
+    let items = match parse_batch(&req) {
+        Ok(v) => v,
+        Err((code, msg)) => return (code, msg).into_response(),
+    };
+    let repo = state.repo.clone();
+    let results = run_batch(
+        items,
+        move |id, from, to| {
+            let repo = repo.clone();
+            async move { repo.funding_range(&id, from, to).await }
+        },
+        FundingDto::from,
+    )
+    .await;
+    Json(RangeBatchResponse { results }).into_response()
+}
+
+async fn funding_event_range_batch(
+    State(state): State<RestState>,
+    Json(req): Json<RangeBatchRequest>,
+) -> impl IntoResponse {
+    let _t = crate::metrics::Timer::start("REST_FundingEventRangeBatch");
+    let items = match parse_batch(&req) {
+        Ok(v) => v,
+        Err((code, msg)) => return (code, msg).into_response(),
+    };
+    let repo = state.repo.clone();
+    let results = run_batch(
+        items,
+        move |id, from, to| {
+            let repo = repo.clone();
+            async move { repo.funding_events_range(&id, from, to).await }
+        },
+        FundingEventDto::from,
+    )
+    .await;
+    Json(RangeBatchResponse { results }).into_response()
 }
