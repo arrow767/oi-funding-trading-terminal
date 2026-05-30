@@ -225,6 +225,113 @@ async fn latest(
 struct RangeQuery {
     from: String,
     to: String,
+    /// Wire format. Default `row` = legacy array-of-objects (one JSON
+    /// object per bar). `col` switches to columnar (parallel arrays,
+    /// short keys, unix-ms timestamps) which is ~30-40% smaller before
+    /// gzip and 3-5× faster to parse on the client because there's no
+    /// per-bar object construction. Server side both formats are equally
+    /// cheap: we build BarDto then transpose for columnar.
+    #[serde(default)]
+    fmt: Option<String>,
+}
+
+/// Columnar OI range payload. Field name aliases are deliberately short
+/// (2 chars) because the names are the only repeated content gzip can't
+/// further dedupe — `native_close` appearing 1500× costs the same gzip
+/// pre-image bytes as 1500 separate entries; shrinking to `nc` cuts that
+/// 6×. Optional columns are entirely omitted via `skip_serializing_if`
+/// when a venue exposes nothing in that axis (e.g. coins-side data on
+/// venues that only report USD OI).
+#[derive(Serialize, Default)]
+struct OiColumns {
+    /// Marker so the client can detect format from the JSON without
+    /// reading the Content-Type header (which goes through nginx).
+    fmt: &'static str,
+    /// Bar count. Saves one full array traversal on the client.
+    n: usize,
+    /// bucket_ts as unix-ms (i64). Two reasons over RFC3339 strings:
+    ///  * ~13 bytes vs ~20 per ts — adds up over 1500-bar windows
+    ///  * client parses i64 directly into BucketMs — no string→DateTime
+    ///    fallback chain that previously dropped bars on format drift.
+    ts: Vec<i64>,
+    #[serde(rename = "no")] native_open: Vec<String>,
+    #[serde(rename = "nh")] native_high: Vec<String>,
+    #[serde(rename = "nl")] native_low: Vec<String>,
+    #[serde(rename = "nc")] native_close: Vec<String>,
+    #[serde(rename = "co", skip_serializing_if = "Option::is_none")]
+    oi_coins_open: Option<Vec<Option<String>>>,
+    #[serde(rename = "ch", skip_serializing_if = "Option::is_none")]
+    oi_coins_high: Option<Vec<Option<String>>>,
+    #[serde(rename = "cl", skip_serializing_if = "Option::is_none")]
+    oi_coins_low: Option<Vec<Option<String>>>,
+    #[serde(rename = "cc", skip_serializing_if = "Option::is_none")]
+    oi_coins_close: Option<Vec<Option<String>>>,
+    #[serde(rename = "uo", skip_serializing_if = "Option::is_none")]
+    oi_usd_open: Option<Vec<Option<String>>>,
+    #[serde(rename = "uh", skip_serializing_if = "Option::is_none")]
+    oi_usd_high: Option<Vec<Option<String>>>,
+    #[serde(rename = "ul", skip_serializing_if = "Option::is_none")]
+    oi_usd_low: Option<Vec<Option<String>>>,
+    #[serde(rename = "uc", skip_serializing_if = "Option::is_none")]
+    oi_usd_close: Option<Vec<Option<String>>>,
+}
+
+impl OiColumns {
+    /// Transpose Vec<OiSnapshot> into the columnar layout. Optional
+    /// columns are emitted iff at least one row has a value — saves
+    /// venues that never populate (say) coins-side from carrying a
+    /// 1500-element null array.
+    fn from_snapshots(snaps: Vec<oi_core::OiSnapshot>) -> Self {
+        let n = snaps.len();
+        let mut out = OiColumns { fmt: "col", n, ..Default::default() };
+        out.ts = Vec::with_capacity(n);
+        out.native_open = Vec::with_capacity(n);
+        out.native_high = Vec::with_capacity(n);
+        out.native_low = Vec::with_capacity(n);
+        out.native_close = Vec::with_capacity(n);
+
+        // First pass: detect which optional axes have any data, so we can
+        // either allocate the column upfront or leave it as None.
+        let mut has_co = false;
+        let mut has_uo = false;
+        for s in &snaps {
+            if !has_co && (s.oi_coins_open.is_some() || s.oi_coins_high.is_some()
+                || s.oi_coins_low.is_some() || s.oi_coins_close.is_some()) { has_co = true; }
+            if !has_uo && (s.oi_usd_open.is_some() || s.oi_usd_high.is_some()
+                || s.oi_usd_low.is_some() || s.oi_usd_close.is_some()) { has_uo = true; }
+            if has_co && has_uo { break; }
+        }
+        if has_co {
+            out.oi_coins_open  = Some(Vec::with_capacity(n));
+            out.oi_coins_high  = Some(Vec::with_capacity(n));
+            out.oi_coins_low   = Some(Vec::with_capacity(n));
+            out.oi_coins_close = Some(Vec::with_capacity(n));
+        }
+        if has_uo {
+            out.oi_usd_open  = Some(Vec::with_capacity(n));
+            out.oi_usd_high  = Some(Vec::with_capacity(n));
+            out.oi_usd_low   = Some(Vec::with_capacity(n));
+            out.oi_usd_close = Some(Vec::with_capacity(n));
+        }
+
+        let opt = |o: &Option<rust_decimal::Decimal>| o.as_ref().map(|d| d.to_string());
+        for s in snaps {
+            out.ts.push((s.bucket_ts.unix_timestamp_nanos() / 1_000_000) as i64);
+            out.native_open.push(s.native_open.to_string());
+            out.native_high.push(s.native_high.to_string());
+            out.native_low.push(s.native_low.to_string());
+            out.native_close.push(s.native_close.to_string());
+            if let Some(v) = out.oi_coins_open.as_mut()  { v.push(opt(&s.oi_coins_open)); }
+            if let Some(v) = out.oi_coins_high.as_mut()  { v.push(opt(&s.oi_coins_high)); }
+            if let Some(v) = out.oi_coins_low.as_mut()   { v.push(opt(&s.oi_coins_low)); }
+            if let Some(v) = out.oi_coins_close.as_mut() { v.push(opt(&s.oi_coins_close)); }
+            if let Some(v) = out.oi_usd_open.as_mut()  { v.push(opt(&s.oi_usd_open)); }
+            if let Some(v) = out.oi_usd_high.as_mut()  { v.push(opt(&s.oi_usd_high)); }
+            if let Some(v) = out.oi_usd_low.as_mut()   { v.push(opt(&s.oi_usd_low)); }
+            if let Some(v) = out.oi_usd_close.as_mut() { v.push(opt(&s.oi_usd_close)); }
+        }
+        out
+    }
 }
 
 async fn range(
@@ -244,7 +351,9 @@ async fn range(
         Ok(t) => t,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
+    let columnar = matches!(q.fmt.as_deref(), Some("col"));
     match state.repo.range(&id, from, to).await {
+        Ok(snaps) if columnar => Json(OiColumns::from_snapshots(snaps)).into_response(),
         Ok(snaps) => Json(snaps.into_iter().map(BarDto::from).collect::<Vec<_>>()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -283,6 +392,43 @@ impl From<oi_core::funding::FundingBar> for FundingDto {
             next_funding_ts: b.next_funding_ts.map(ts_rfc3339),
             interval_hours: b.interval_hours,
         }
+    }
+}
+
+/// Columnar funding range — same rationale as `OiColumns`. The shape is
+/// narrower (no nested OHLC), so the gain over row format is smaller but
+/// still meaningful when 1500 bars × the "rate" key would repeat.
+#[derive(Serialize, Default)]
+struct FundingColumns {
+    fmt: &'static str,
+    n: usize,
+    ts: Vec<i64>,
+    #[serde(rename = "r")] rate: Vec<String>,
+    #[serde(rename = "nft", skip_serializing_if = "Option::is_none")]
+    next_funding_ts: Option<Vec<Option<i64>>>,
+    #[serde(rename = "ih", skip_serializing_if = "Option::is_none")]
+    interval_hours: Option<Vec<Option<u8>>>,
+}
+
+impl FundingColumns {
+    fn from_bars(bars: Vec<oi_core::funding::FundingBar>) -> Self {
+        let n = bars.len();
+        let mut out = FundingColumns { fmt: "col", n, ..Default::default() };
+        out.ts = Vec::with_capacity(n);
+        out.rate = Vec::with_capacity(n);
+        let has_nft = bars.iter().any(|b| b.next_funding_ts.is_some());
+        let has_ih  = bars.iter().any(|b| b.interval_hours.is_some());
+        if has_nft { out.next_funding_ts = Some(Vec::with_capacity(n)); }
+        if has_ih  { out.interval_hours  = Some(Vec::with_capacity(n)); }
+        for b in bars {
+            out.ts.push((b.bucket_ts.unix_timestamp_nanos() / 1_000_000) as i64);
+            out.rate.push(b.rate.to_string());
+            if let Some(v) = out.next_funding_ts.as_mut() {
+                v.push(b.next_funding_ts.map(|t| (t.unix_timestamp_nanos() / 1_000_000) as i64));
+            }
+            if let Some(v) = out.interval_hours.as_mut() { v.push(b.interval_hours); }
+        }
+        out
     }
 }
 
@@ -332,7 +478,9 @@ async fn funding_range(
         Ok(t) => t,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
+    let columnar = matches!(q.fmt.as_deref(), Some("col"));
     match state.repo.funding_range(&id, from, to).await {
+        Ok(bars) if columnar => Json(FundingColumns::from_bars(bars)).into_response(),
         Ok(bars) => Json(bars.into_iter().map(FundingDto::from).collect::<Vec<_>>())
             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -433,20 +581,48 @@ struct RangeBatchItem {
 #[derive(Deserialize)]
 struct RangeBatchRequest {
     items: Vec<RangeBatchItem>,
+    /// Same opt-in semantics as the single-range `?fmt=col` query
+    /// parameter — when `"col"`, every result entry's payload is the
+    /// columnar layout instead of `bars: [...]`. The format choice
+    /// applies to the whole batch (you can't mix row + col per-item).
+    #[serde(default)]
+    fmt: Option<String>,
 }
 
 #[derive(Serialize)]
-struct RangeBatchResponse<T> {
-    results: Vec<BatchEntry<T>>,
+struct RangeBatchResponse<P> {
+    results: Vec<BatchEntry<P>>,
 }
 
+/// Generic batch entry. `payload` is flattened into the JSON object so
+/// the wire shape is `{exchange, symbol, error?, ...payload fields...}` —
+/// row path embeds `{bars: [...]}` (RowPayload), columnar path embeds
+/// the `{fmt, n, ts, no, ...}` columns directly at the entry level. A
+/// single helper drives both formats; only the finalize closure differs.
 #[derive(Serialize)]
-struct BatchEntry<T> {
+struct BatchEntry<P> {
     exchange: String,
     symbol: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(flatten)]
+    payload: P,
+}
+
+/// Row-shaped payload. Default = no bars, used for the error-case entry
+/// so a single bad input doesn't kill the batch — the client sees
+/// `{exchange, symbol, error, bars: []}` per failed item.
+#[derive(Serialize)]
+struct RowPayload<T> {
     bars: Vec<T>,
+}
+
+// Manual Default: the derive macro would inherit `T: Default` (since
+// it tries to default each field), but `Vec::<T>::new()` doesn't need
+// T to be Default. Hand-rolled avoids forcing `#[derive(Default)]` on
+// every DTO that ever flows through a batch endpoint.
+impl<T> Default for RowPayload<T> {
+    fn default() -> Self { Self { bars: Vec::new() } }
 }
 
 /// Validate every item's `(exchange, symbol, from, to)`. Returns either
@@ -478,27 +654,31 @@ fn parse_batch(req: &RangeBatchRequest)
 }
 
 /// Fan out per-item queries with bounded concurrency, preserving input
-/// order. `query` runs the repo call; `to_dto` maps the row type to the
-/// DTO. Per-item errors land in the response's `error` field and are
-/// logged, but never abort the batch.
-async fn run_batch<T, U, FQuery, Fut, FMap>(
+/// order. `query` runs the repo call; `finalize` takes the whole per-item
+/// row vec and turns it into the payload that gets flattened into the
+/// JSON response (e.g. `RowPayload { bars: ... }` or `OiColumns`). The
+/// finalize-takes-Vec signature is what lets the same helper drive both
+/// row and columnar formats — columnar needs the full vec to transpose.
+/// Per-item errors land in the response's `error` field and are logged,
+/// but never abort the batch.
+async fn run_batch<T, P, FQuery, Fut, FFinalize>(
     items: Vec<(InstrumentId, OffsetDateTime, OffsetDateTime)>,
     query: FQuery,
-    to_dto: FMap,
-) -> Vec<BatchEntry<U>>
+    finalize: FFinalize,
+) -> Vec<BatchEntry<P>>
 where
     FQuery: Fn(InstrumentId, OffsetDateTime, OffsetDateTime) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = oi_core::error::Result<Vec<T>>> + Send,
-    FMap: Fn(T) -> U + Send + Sync + 'static + Copy,
+    FFinalize: Fn(Vec<T>) -> P + Send + Sync + 'static + Copy,
     T: Send + 'static,
-    U: Send + 'static,
+    P: Send + Default + 'static,
 {
     use std::pin::Pin;
     type ItemResult<T> = (usize, String, String, oi_core::error::Result<Vec<T>>);
 
     let total = items.len();
     let query = Arc::new(query);
-    let mut results: Vec<Option<BatchEntry<U>>> = (0..total).map(|_| None).collect();
+    let mut results: Vec<Option<BatchEntry<P>>> = (0..total).map(|_| None).collect();
     // Box::pin erases the unique per-async-block type so FuturesUnordered
     // can hold an arbitrary mix of priming / refill futures.
     let mut inflight: FuturesUnordered<Pin<Box<dyn std::future::Future<Output = ItemResult<T>> + Send>>>
@@ -530,13 +710,13 @@ where
                 exchange,
                 symbol,
                 error: None,
-                bars: rows.into_iter().map(to_dto).collect(),
+                payload: finalize(rows),
             },
             Err(e) => BatchEntry {
                 exchange,
                 symbol,
                 error: Some(e.to_string()),
-                bars: Vec::new(),
+                payload: P::default(),
             },
         };
         results[idx] = Some(entry);
@@ -560,17 +740,33 @@ async fn range_batch(
         Ok(v) => v,
         Err((code, msg)) => return (code, msg).into_response(),
     };
+    let columnar = matches!(req.fmt.as_deref(), Some("col"));
     let repo = state.repo.clone();
-    let results = run_batch(
-        items,
-        move |id, from, to| {
-            let repo = repo.clone();
-            async move { repo.range(&id, from, to).await }
-        },
-        BarDto::from,
-    )
-    .await;
-    Json(RangeBatchResponse { results }).into_response()
+    if columnar {
+        let results = run_batch(
+            items,
+            move |id, from, to| {
+                let repo = repo.clone();
+                async move { repo.range(&id, from, to).await }
+            },
+            OiColumns::from_snapshots,
+        )
+        .await;
+        Json(RangeBatchResponse { results }).into_response()
+    } else {
+        let results = run_batch(
+            items,
+            move |id, from, to| {
+                let repo = repo.clone();
+                async move { repo.range(&id, from, to).await }
+            },
+            |rows: Vec<oi_core::OiSnapshot>| RowPayload {
+                bars: rows.into_iter().map(BarDto::from).collect(),
+            },
+        )
+        .await;
+        Json(RangeBatchResponse { results }).into_response()
+    }
 }
 
 async fn funding_range_batch(
@@ -582,17 +778,33 @@ async fn funding_range_batch(
         Ok(v) => v,
         Err((code, msg)) => return (code, msg).into_response(),
     };
+    let columnar = matches!(req.fmt.as_deref(), Some("col"));
     let repo = state.repo.clone();
-    let results = run_batch(
-        items,
-        move |id, from, to| {
-            let repo = repo.clone();
-            async move { repo.funding_range(&id, from, to).await }
-        },
-        FundingDto::from,
-    )
-    .await;
-    Json(RangeBatchResponse { results }).into_response()
+    if columnar {
+        let results = run_batch(
+            items,
+            move |id, from, to| {
+                let repo = repo.clone();
+                async move { repo.funding_range(&id, from, to).await }
+            },
+            FundingColumns::from_bars,
+        )
+        .await;
+        Json(RangeBatchResponse { results }).into_response()
+    } else {
+        let results = run_batch(
+            items,
+            move |id, from, to| {
+                let repo = repo.clone();
+                async move { repo.funding_range(&id, from, to).await }
+            },
+            |rows: Vec<oi_core::funding::FundingBar>| RowPayload {
+                bars: rows.into_iter().map(FundingDto::from).collect(),
+            },
+        )
+        .await;
+        Json(RangeBatchResponse { results }).into_response()
+    }
 }
 
 async fn funding_event_range_batch(
@@ -604,6 +816,9 @@ async fn funding_event_range_batch(
         Ok(v) => v,
         Err((code, msg)) => return (code, msg).into_response(),
     };
+    // Funding-events stay row-only: events are sparse (≤21 per 7d for an
+    // 8h venue), so the per-key repeating cost columnar would save is
+    // negligible and not worth a second wire format.
     let repo = state.repo.clone();
     let results = run_batch(
         items,
@@ -611,7 +826,9 @@ async fn funding_event_range_batch(
             let repo = repo.clone();
             async move { repo.funding_events_range(&id, from, to).await }
         },
-        FundingEventDto::from,
+        |rows: Vec<oi_core::funding::FundingEvent>| RowPayload {
+            bars: rows.into_iter().map(FundingEventDto::from).collect(),
+        },
     )
     .await;
     Json(RangeBatchResponse { results }).into_response()
