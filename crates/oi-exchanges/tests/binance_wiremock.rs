@@ -40,6 +40,17 @@ async fn binance_discovery_oi_and_prices_end_to_end() {
         .mount(&server)
         .await;
 
+    // TradFi perp (equity): contractType TRADIFI_PERPETUAL must be
+    // discovered and polled exactly like a crypto PERPETUAL.
+    Mock::given(method("GET"))
+        .and(path("/fapi/v1/openInterest"))
+        .and(query_param("symbol", "TSLAUSDT"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"symbol":"TSLAUSDT","openInterest":"43965.43","time":1714000000000}"#,
+        ))
+        .mount(&server)
+        .await;
+
     Mock::given(method("GET"))
         .and(path("/fapi/v1/premiumIndex"))
         .respond_with(ResponseTemplate::new(200).set_body_string(PREMIUM_INDEX))
@@ -48,10 +59,11 @@ async fn binance_discovery_oi_and_prices_end_to_end() {
 
     let adapter = BinanceUsdmAdapter::with_base_url(server.uri()).unwrap();
 
-    // Discovery: perpetuals only, dated skipped.
+    // Discovery: every perpetual class (crypto PERPETUAL + TradFi
+    // TRADIFI_PERPETUAL) is kept; dated quarterly contracts are skipped.
     let metas = adapter.discover_instruments().await.unwrap();
     let symbols: Vec<&str> = metas.iter().map(|m| m.id.symbol.as_str()).collect();
-    assert_eq!(symbols, vec!["BTCUSDT", "ETHUSDT"]);
+    assert_eq!(symbols, vec!["BTCUSDT", "ETHUSDT", "TSLAUSDT"]);
     for m in &metas {
         assert_eq!(m.native_unit, UnitKind::Coins);
         assert!(m.is_perpetual);
@@ -60,14 +72,17 @@ async fn binance_discovery_oi_and_prices_end_to_end() {
 
     let ids: Vec<InstrumentId> = metas.iter().map(|m| m.id.clone()).collect();
 
-    // OI fan-out: both symbols returned, correct unit + value.
+    // OI fan-out: all perpetuals returned, correct unit + value.
     let bucket = datetime!(2026-04-24 10:00:00 UTC);
     let raw = adapter.fetch_oi(&ids, bucket).await.unwrap();
-    assert_eq!(raw.len(), 2);
+    assert_eq!(raw.len(), 3);
     let btc = raw.iter().find(|r| r.instrument.symbol == "BTCUSDT").unwrap();
     assert_eq!(btc.unit, UnitKind::Coins);
     assert_eq!(btc.value, dec!(80123.456));
     assert_eq!(btc.bucket_ts, bucket);
+    let tsla = raw.iter().find(|r| r.instrument.symbol == "TSLAUSDT").unwrap();
+    assert_eq!(tsla.unit, UnitKind::Coins);
+    assert_eq!(tsla.value, dec!(43965.43));
 
     // Prices: batch call filters to requested symbols.
     let quotes = adapter.fetch_prices(&ids).await.unwrap();
@@ -133,6 +148,18 @@ const EXCHANGE_INFO: &str = r#"{
       "quoteAsset": "USDT",
       "status": "TRADING",
       "filters": []
+    },
+    {
+      "symbol": "TSLAUSDT",
+      "contractType": "TRADIFI_PERPETUAL",
+      "underlyingType": "EQUITY",
+      "baseAsset": "TSLA",
+      "quoteAsset": "USDT",
+      "status": "TRADING",
+      "filters": [
+        {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+        {"filterType": "LOT_SIZE", "stepSize": "0.01"}
+      ]
     }
   ]
 }"#;

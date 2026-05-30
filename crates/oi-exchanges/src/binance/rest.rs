@@ -140,8 +140,17 @@ impl ExchangeAdapter for BinanceUsdmAdapter {
 
         let mut out = Vec::with_capacity(info.symbols.len());
         for s in info.symbols {
-            if s.contract_type != "PERPETUAL" {
-                continue; // skip dated
+            // Binance tags dated futures CURRENT_QUARTER / NEXT_QUARTER and
+            // every perpetual with a `*PERPETUAL` contractType: plain
+            // "PERPETUAL" for crypto and "TRADIFI_PERPETUAL" for the
+            // equity/ETF/commodity ("TradFi") perps — TSLA, NVDA, XAU, CL,
+            // … — which expose OI / mark price / funding on the very same
+            // endpoints. Suffix-match so we collect every perpetual class
+            // (including any future `*PERPETUAL`) and skip only the dated
+            // contracts; an exact "PERPETUAL" check is precisely what hid
+            // the TradFi perps until now.
+            if !s.contract_type.ends_with("PERPETUAL") {
+                continue; // dated future — skip
             }
             let active = s.status == "TRADING";
             let (price_tick, qty_step) = extract_filters(&s.filters);
