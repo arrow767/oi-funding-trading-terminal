@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONIOENCODING=utf-8 python /c/tmp/probe_batch_col.py)",
+      "Bash(dotnet build *)",
+      "Bash(curl -s --max-time 15 \"https://fapi.binance.com/fapi/v1/openInterest?symbol=SOXLUSDT\")",
+      "Bash(curl -s --max-time 20 \"https://fapi.binance.com/fapi/v1/exchangeInfo\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); s=[x for x in d['symbols'] if x['symbol']=='SOXLUSDT']; print\\(json.dumps\\(s, indent=2\\) if s else 'NOT FOUND'\\)\")"
+    ]
+  }
+}
