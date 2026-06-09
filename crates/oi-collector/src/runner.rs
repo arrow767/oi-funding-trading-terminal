@@ -19,8 +19,9 @@ use rust_decimal::Decimal;
 use time::OffsetDateTime;
 use oi_exchanges::{
     aster::AsterAdapter, binance::BinanceUsdmAdapter, bingx::BingXAdapter,
-    bitget::BitgetAdapter, bybit::BybitAdapter, hyperliquid::HyperliquidAdapter,
-    kucoin::KuCoinAdapter, mexc::MexcAdapter, okx::OkxAdapter,
+    bitget::BitgetAdapter, bybit::BybitAdapter, gate::GateAdapter,
+    hyperliquid::HyperliquidAdapter, kucoin::KuCoinAdapter, mexc::MexcAdapter,
+    okx::OkxAdapter,
 };
 use oi_replication::{spawn_lease, LeaseConfig, LeaseManager};
 use std::collections::HashMap;
@@ -351,6 +352,7 @@ async fn run_async() -> anyhow::Result<()> {
             Exchange::Aster => Arc::new(AsterAdapter::new()?),
             Exchange::BingX => Arc::new(BingXAdapter::new()?),
             Exchange::KuCoin => Arc::new(KuCoinAdapter::new()?),
+            Exchange::Gate => Arc::new(GateAdapter::new()?),
         };
         let repo_clone = repo.clone();
         let prices = prices.clone();

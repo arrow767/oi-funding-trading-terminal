@@ -18,6 +18,7 @@ pub mod mexc;
 pub mod bitget;
 pub mod hyperliquid;
 pub mod aster;
+pub mod gate;
 
 /// Which adapters are production-ready. The collector consults this to
 /// decide whether to instantiate an adapter or log "skipped stub". Keeping
@@ -31,6 +32,6 @@ pub fn is_production_ready(ex: oi_core::Exchange) -> bool {
     use oi_core::Exchange as E;
     match ex {
         E::Binance | E::Bybit | E::Hyperliquid | E::Okx | E::Bitget | E::Mexc
-        | E::Aster | E::BingX | E::KuCoin => true,
+        | E::Aster | E::BingX | E::KuCoin | E::Gate => true,
     }
 }

@@ -20,6 +20,7 @@ pub enum Exchange {
     Bitget,
     Hyperliquid,
     Aster,
+    Gate,
 }
 
 impl Exchange {
@@ -37,6 +38,7 @@ impl Exchange {
             Self::Bitget => "bitget",
             Self::Hyperliquid => "hyperliquid",
             Self::Aster => "aster",
+            Self::Gate => "gate",
         }
     }
 
@@ -54,6 +56,7 @@ impl Exchange {
             Self::Bitget,
             Self::Hyperliquid,
             Self::Aster,
+            Self::Gate,
         ]
     }
 }
@@ -77,6 +80,7 @@ impl FromStr for Exchange {
             "bitget" => Ok(Self::Bitget),
             "hyperliquid" => Ok(Self::Hyperliquid),
             "aster" => Ok(Self::Aster),
+            "gate" => Ok(Self::Gate),
             other => Err(format!("unknown exchange: {other}")),
         }
     }
