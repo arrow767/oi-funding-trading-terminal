@@ -25,8 +25,9 @@ use oi_core::{
 };
 use oi_exchanges::{
     aster::AsterAdapter, binance::BinanceUsdmAdapter, bingx::BingXAdapter,
-    bitget::BitgetAdapter, bybit::BybitAdapter, hyperliquid::HyperliquidAdapter,
-    kucoin::KuCoinAdapter, mexc::MexcAdapter, okx::OkxAdapter,
+    bitget::BitgetAdapter, bybit::BybitAdapter, gate::GateAdapter,
+    hyperliquid::HyperliquidAdapter, kucoin::KuCoinAdapter, mexc::MexcAdapter,
+    okx::OkxAdapter,
 };
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
@@ -43,6 +44,7 @@ fn adapter_for(ex: Exchange) -> anyhow::Result<Arc<dyn ExchangeAdapter>> {
         Exchange::Aster => Arc::new(AsterAdapter::new()?),
         Exchange::BingX => Arc::new(BingXAdapter::new()?),
         Exchange::KuCoin => Arc::new(KuCoinAdapter::new()?),
+        Exchange::Gate => Arc::new(GateAdapter::new()?),
     })
 }
 
